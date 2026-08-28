@@ -13,7 +13,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = os.getenv(
     "DJANGO_SECRET_KEY",
-    "django-insecure-6uhluib12h8!y&kg-t6#rcj3*_tpwq_&)2#^huz*%=f+_7n5&g",
+    "",
 )
 
 DEBUG = os.getenv("DJANGO_DEBUG", "true").lower() == "true"
