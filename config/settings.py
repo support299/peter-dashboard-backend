@@ -118,6 +118,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:5173",
     "http://localhost:4173",
     "http://127.0.0.1:4173",
+    "http://51.21.79.241",
 ]
 CORS_ALLOW_CREDENTIALS = True
 
@@ -126,6 +127,7 @@ CSRF_TRUSTED_ORIGINS = [
     "http://127.0.0.1:5173",
     "http://localhost:8000",
     "http://127.0.0.1:8000",
+    "http://51.21.79.241",
 ]
 if _jobber_redirect.startswith("https://"):
     CSRF_TRUSTED_ORIGINS.append(f"{urlparse(_jobber_redirect).scheme}://{urlparse(_jobber_redirect).netloc}")
