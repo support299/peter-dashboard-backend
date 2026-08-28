@@ -37,7 +37,17 @@ def _clean_name(value):
     return text
 
 
-def client_display_name(client) -> str:
+def _looks_like_phone(value) -> bool:
+    text = (value or "").strip()
+    if not text:
+        return False
+    digits = sum(ch.isdigit() for ch in text)
+    if digits < 7:
+        return False
+    return all(ch.isdigit() or ch in "+()- ." for ch in text)
+
+
+def client_display_name(client, *, include_phone_fallback=True) -> str:
     if not client:
         return ""
     full = " ".join(part for part in [_clean_name(client.first_name), _clean_name(client.last_name)] if part)
@@ -47,9 +57,16 @@ def client_display_name(client) -> str:
     if company:
         return company
     name = _clean_name(client.name)
-    if name:
+    if name and not _looks_like_phone(name):
         return name
-    return _clean_name(client.phone) or _clean_name(client.email) or "Unnamed"
+    if include_phone_fallback:
+        phone = _clean_name(client.phone)
+        if phone:
+            return phone
+        email = _clean_name(client.email)
+        if email:
+            return email
+    return "Unnamed customer"
 
 
 def _unnamed_client():
@@ -530,12 +547,17 @@ def clients(request):
     qs = Client.objects.annotate(
         job_count=Count("jobs", distinct=True),
         visit_count=Count("visits", distinct=True),
+        phone_name=Case(
+            When(Q(name__startswith="+"), then=Value(1)),
+            default=Value(0),
+            output_field=IntegerField(),
+        ),
         unnamed=Case(
             When(_unnamed_client(), then=Value(1)),
             default=Value(0),
             output_field=IntegerField(),
         ),
-    ).order_by("unnamed", "name", "last_name", "first_name")
+    ).order_by("phone_name", "unnamed", "name", "last_name", "first_name")
     search = request.GET.get("q")
     if request.GET.get("leads") == "1":
         qs = qs.filter(is_lead=True)
@@ -557,7 +579,10 @@ def clients(request):
         request,
         lambda client: {
             "id": client.id,
-            "name": client_display_name(client),
+            "name": client_display_name(client, include_phone_fallback=False),
+            "first_name": _clean_name(client.first_name),
+            "last_name": _clean_name(client.last_name),
+            "company_name": _clean_name(client.company_name),
             "email": client.email,
             "phone": client.phone,
             "city": client.billing_city,

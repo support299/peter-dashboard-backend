@@ -54,10 +54,21 @@ def clean_name(value, limit: int = 255) -> str:
 
 def person_display_name(node: dict | None) -> str:
     node = node or {}
+    name_value = node.get("name")
+    if isinstance(name_value, dict):
+        full = clean_name(name_value.get("full")) or " ".join(
+            part for part in [clean_name(name_value.get("first")), clean_name(name_value.get("last"))] if part
+        )
+        if full:
+            return full
+    else:
+        primary = clean_name(name_value)
+        if primary:
+            return primary
     first = clean_name(node.get("firstName"))
     last = clean_name(node.get("lastName"))
     full = " ".join(part for part in [first, last] if part)
-    return full or clean_name(node.get("companyName")) or clean_name(node.get("name"))
+    return full or clean_name(node.get("companyName"))
 
 
 def parse_decimal(value):

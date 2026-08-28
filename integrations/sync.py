@@ -374,7 +374,7 @@ class JobberSyncService:
             integration=self.integration,
             external_id=node["id"],
             defaults={
-                "name": person_display_name(node) or clip(node.get("phone") or node.get("email"), 255),
+                "name": person_display_name(node),
                 "first_name": clean_name(node.get("firstName")),
                 "last_name": clean_name(node.get("lastName")),
                 "company_name": clean_name(node.get("companyName")),
