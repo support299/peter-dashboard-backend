@@ -137,7 +137,7 @@ def dashboard(request):
             "count": row["count"],
             "amount": _money(row["amount"]),
         }
-        for row in invoices.values("invoice_status").annotate(count=Count("id"), amount=Sum("total")).order_by("-amount")
+        for row in invoices.values("invoice_status").annotate(count=Count("id"), amount=Sum("subtotal")).order_by("-amount")
     ]
 
     facts = MetricFact.objects.filter(bucket_date__gte=_last_months()[0])
@@ -200,7 +200,7 @@ def dashboard(request):
                 {
                     "key": "revenue",
                     "label": "Invoice revenue",
-                    "value": _money(invoices.aggregate(s=Sum("total"))["s"]),
+                    "value": _money(invoices.aggregate(s=Sum("subtotal"))["s"]),
                     "kind": "currency",
                     "view": "invoices",
                 },
@@ -629,7 +629,10 @@ def invoices(request):
             "status": _label(invoice.invoice_status),
             "issued_at": invoice.issued_date,
             "due_at": invoice.due_date,
-            "total": _money(invoice.total),
+            "total": _money(invoice.subtotal if invoice.subtotal is not None else invoice.total),
+            "subtotal": _money(invoice.subtotal),
+            "tax": _money(invoice.tax_amount),
+            "gross_total": _money(invoice.total),
             "balance": _money(invoice.balance),
             "client": client_display_name(invoice.client) or None,
         },
@@ -652,9 +655,10 @@ def invoice_detail(request, pk):
                 "client_id": invoice.client_id,
                 "issued_at": invoice.issued_date,
                 "due_at": invoice.due_date,
-                "total": _money(invoice.total),
+                "total": _money(invoice.subtotal if invoice.subtotal is not None else invoice.total),
                 "subtotal": _money(invoice.subtotal),
                 "tax": _money(invoice.tax_amount),
+                "gross_total": _money(invoice.total),
                 "balance": _money(invoice.balance),
                 "paid": _money(invoice.payments_total),
                 "jobs": [{"id": job.id, "title": job.title or f"Job #{job.job_number or job.id}"} for job in invoice.jobs.all()[:12]],

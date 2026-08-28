@@ -903,9 +903,10 @@ class JobberSyncService:
             )
 
         for invoice in Invoice.objects.filter(integration=integration).iterator():
-            if invoice.total is None:
+            amount = invoice.subtotal if invoice.subtotal is not None else invoice.total
+            if amount is None:
                 continue
-            add("invoice_revenue", invoice.issued_date or invoice.source_created_at, invoice.total, None)
+            add("invoice_revenue", invoice.issued_date or invoice.source_created_at, amount, None)
 
         from operations.models import CancellationRecord
 
