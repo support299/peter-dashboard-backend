@@ -23,6 +23,7 @@ _jobber_redirect_host = urlparse(_jobber_redirect).hostname
 _frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
 _frontend_host = urlparse(_frontend_url).hostname
 
+# Domain only — do NOT add the public EC2 IP (blocks IP-scanning bots).
 ALLOWED_HOSTS = [
     "localhost",
     "127.0.0.1",
@@ -31,10 +32,9 @@ ALLOWED_HOSTS = [
     ".ngrok.app",
     "insights.cleanonthego.com",
 ]
-if _jobber_redirect_host:
-    ALLOWED_HOSTS.append(_jobber_redirect_host)
-if _frontend_host:
-    ALLOWED_HOSTS.append(_frontend_host)
+for _host in (_jobber_redirect_host, _frontend_host):
+    if _host and _host not in ALLOWED_HOSTS and not _host.replace(".", "").isdigit():
+        ALLOWED_HOSTS.append(_host)
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -119,8 +119,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:5173",
     "http://localhost:4173",
     "http://127.0.0.1:4173",
-    "http://51.21.79.241",
-    "https://insights.cleanonthego.com"
+    "https://insights.cleanonthego.com",
 ]
 CORS_ALLOW_CREDENTIALS = True
 
@@ -129,8 +128,7 @@ CSRF_TRUSTED_ORIGINS = [
     "http://127.0.0.1:5173",
     "http://localhost:8000",
     "http://127.0.0.1:8000",
-    "http://51.21.79.241",
-    "https://insights.cleanonthego.com"
+    "https://insights.cleanonthego.com",
 ]
 if _jobber_redirect.startswith("https://"):
     CSRF_TRUSTED_ORIGINS.append(f"{urlparse(_jobber_redirect).scheme}://{urlparse(_jobber_redirect).netloc}")
