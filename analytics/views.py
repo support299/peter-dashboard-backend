@@ -8,6 +8,7 @@ from django.urls import path
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_http_methods
 
+from accounts.authz import protect
 from analytics.hub_models import (
     AdminInternalSyncRun,
     HubAlert,
@@ -464,13 +465,13 @@ def filter_options(request):
 
 
 urlpatterns = [
-    path("status/", status),
-    path("sync/", sync),
-    path("dashboard/", dashboard),
-    path("employees/", employees),
-    path("leave/", leave),
-    path("bonuses/", bonuses),
-    path("lockins/", lockins),
-    path("visits/", visits),
-    path("filters/", filter_options),
+    path("status/", protect(status)),
+    path("sync/", protect(sync)),
+    path("dashboard/", protect(dashboard)),
+    path("employees/", protect(employees)),
+    path("leave/", protect(leave)),
+    path("bonuses/", protect(bonuses)),
+    path("lockins/", protect(lockins)),
+    path("visits/", protect(visits)),
+    path("filters/", protect(filter_options)),
 ]

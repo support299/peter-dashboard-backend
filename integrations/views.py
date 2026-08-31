@@ -10,6 +10,7 @@ from django.urls import path
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
+from accounts.authz import protect, require_api_auth
 from integrations.models import Integration, SyncRun
 from integrations.oauth import JobberOAuthError, create_authorization_url, exchange_code
 from integrations.sync import JobberSyncService, disconnect_jobber
@@ -104,6 +105,7 @@ def _serialize_integration(integration: Integration | None):
 
 
 @require_GET
+@require_api_auth
 def connect(request):
     try:
         url = create_authorization_url()
@@ -171,9 +173,9 @@ def webhook(request):
 
 urlpatterns = [
     path("connect/", connect, name="jobber-connect"),
-    path("callback/", callback, name="jobber-callback"),
-    path("webhooks/", webhook, name="jobber-webhook"),
-    path("status/", status, name="jobber-status"),
-    path("sync/", sync, name="jobber-sync"),
-    path("disconnect/", disconnect, name="jobber-disconnect"),
+    path("callback/", callback, name="jobber-callback"),  # public — OAuth redirect + state/PKCE
+    path("webhooks/", webhook, name="jobber-webhook"),  # public — HMAC signature verified
+    path("status/", protect(status), name="jobber-status"),
+    path("sync/", protect(sync), name="jobber-sync"),
+    path("disconnect/", protect(disconnect, staff=True), name="jobber-disconnect"),
 ]

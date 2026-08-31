@@ -11,6 +11,7 @@ from django.urls import path
 from django.utils import timezone
 from django.views.decorators.http import require_GET
 
+from accounts.authz import protect
 from analytics.models import MetricFact
 from operations.models import Client, Invoice, Job, Visit
 from operations import analytics_views as ops_analytics
@@ -698,24 +699,24 @@ def invoice_detail(request, pk):
 
 
 urlpatterns = [
-    path("dashboard/", dashboard),
-    path("summary/", summary),
-    path("jobs/", jobs),
-    path("jobs/<int:pk>/", job_detail),
-    path("visits/", visits),
-    path("visits/<int:pk>/", visit_detail),
-    path("clients/", clients),
-    path("clients/<int:pk>/", client_detail),
-    path("invoices/", invoices),
-    path("invoices/<int:pk>/", invoice_detail),
-    path("filters/", ops_analytics.jobber_filters),
-    path("one-off/", ops_analytics.one_off_dashboard),
-    path("cancellations/dashboard/", ops_analytics.cancellations_dashboard),
-    path("cancellations/", ops_analytics.cancellations_list),
-    path("cancellations/process/", ops_analytics.process_cancellations),
-    path("cx/", ops_analytics.cx_dashboard),
-    path("mappings/service-types/", ops_analytics.service_type_mappings),
-    path("mappings/divisions/", ops_analytics.division_rules),
-    path("celery/status/", celery_api.celery_status),
-    path("celery/run/", celery_api.celery_run),
+    path("dashboard/", protect(dashboard)),
+    path("summary/", protect(summary)),
+    path("jobs/", protect(jobs)),
+    path("jobs/<int:pk>/", protect(job_detail)),
+    path("visits/", protect(visits)),
+    path("visits/<int:pk>/", protect(visit_detail)),
+    path("clients/", protect(clients)),
+    path("clients/<int:pk>/", protect(client_detail)),
+    path("invoices/", protect(invoices)),
+    path("invoices/<int:pk>/", protect(invoice_detail)),
+    path("filters/", protect(ops_analytics.jobber_filters)),
+    path("one-off/", protect(ops_analytics.one_off_dashboard)),
+    path("cancellations/dashboard/", protect(ops_analytics.cancellations_dashboard)),
+    path("cancellations/", protect(ops_analytics.cancellations_list)),
+    path("cancellations/process/", protect(ops_analytics.process_cancellations, staff=True)),
+    path("cx/", protect(ops_analytics.cx_dashboard)),
+    path("mappings/service-types/", protect(ops_analytics.service_type_mappings)),
+    path("mappings/divisions/", protect(ops_analytics.division_rules)),
+    path("celery/status/", protect(celery_api.celery_status, staff=True)),
+    path("celery/run/", protect(celery_api.celery_run, staff=True)),
 ]

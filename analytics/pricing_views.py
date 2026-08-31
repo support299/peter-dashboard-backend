@@ -10,6 +10,7 @@ from django.urls import path
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_http_methods
 
+from accounts.authz import protect
 from analytics.pricing_models import (
     PricingAddon,
     PricingBundle,
@@ -548,15 +549,15 @@ def filter_options(request):
 
 
 urlpatterns = [
-    path("status/", status),
-    path("sync/", sync),
-    path("dashboard/", dashboard),
-    path("submissions/", submissions),
-    path("submissions/<int:pk>/", submission_detail),
-    path("services/", services),
-    path("packages/", packages),
-    path("locations/", locations),
-    path("coupons/", coupons),
-    path("addons/", addons),
-    path("filters/", filter_options),
+    path("status/", protect(status)),
+    path("sync/", protect(sync)),
+    path("dashboard/", protect(dashboard)),
+    path("submissions/", protect(submissions)),
+    path("submissions/<int:pk>/", protect(submission_detail)),
+    path("services/", protect(services)),
+    path("packages/", protect(packages)),
+    path("locations/", protect(locations)),
+    path("coupons/", protect(coupons)),
+    path("addons/", protect(addons)),
+    path("filters/", protect(filter_options)),
 ]
