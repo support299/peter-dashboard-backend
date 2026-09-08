@@ -8,7 +8,7 @@ from decimal import Decimal, InvalidOperation
 
 from django.core.paginator import Paginator
 from django.core.serializers.json import DjangoJSONEncoder
-from django.db.models import Q, Sum
+from django.db.models import F, Q, Sum
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.urls import path
