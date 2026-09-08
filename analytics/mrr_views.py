@@ -194,7 +194,11 @@ def _kpi_payload(qs, request):
 
 @require_GET
 def mrr_list(request):
-    qs = MrrBooking.objects.all()
+    qs = MrrBooking.objects.order_by(
+        F("start_date").desc(nulls_last=True),
+        F("monthly_value").desc(),
+        "-id",
+    )
     status = (request.GET.get("status") or "").strip()
     if status:
         qs = qs.filter(status=_normalize_status(status))

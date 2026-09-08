@@ -7,6 +7,7 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from django.conf import settings
 from django.db import models
+from django.db.models import F
 from django.utils import timezone
 
 
@@ -141,7 +142,7 @@ class MrrBooking(models.Model):
     )
 
     class Meta:
-        ordering = ["-start_date", "-id"]
+        ordering = [F("start_date").desc(nulls_last=True), "-id"]
         indexes = [
             models.Index(fields=["status", "start_date"]),
             models.Index(fields=["status", "end_date"]),
