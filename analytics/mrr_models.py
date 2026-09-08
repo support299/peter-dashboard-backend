@@ -70,12 +70,19 @@ def compute_clv(monthly_value, start: date | None, end: date | None, status: str
 
 
 def visits_per_month_for_frequency(frequency: str) -> Decimal:
+    """Client display rules: Weekly=4, Bi-Weekly=2, Monthly=1."""
     freq = normalize_frequency(frequency)
     if freq == "Weekly":
-        return Decimal("4")  # display approx; formulas use 52/12
+        return Decimal("4")
     if freq == "Bi-Weekly":
         return Decimal("2")
     return Decimal("1")
+
+
+def hours_per_month(hours_per_visit, visits_per_month) -> Decimal | None:
+    if hours_per_visit is None or hours_per_visit == "":
+        return None
+    return (_d(hours_per_visit) * _d(visits_per_month)).quantize(TWOPLACES, rounding=ROUND_HALF_UP)
 
 
 class MrrBooking(models.Model):
@@ -157,15 +164,13 @@ class MrrBooking(models.Model):
         self.yearly_value = (self.monthly_value * Decimal(12)).quantize(TWOPLACES, rounding=ROUND_HALF_UP)
 
         freq = normalize_frequency(self.frequency)
+        self.visits_per_month = visits_per_month_for_frequency(freq)
         if freq == "Weekly":
             self.visits_per_year = Decimal("52")
-            self.visits_per_month = (Decimal("52") / Decimal("12")).quantize(Decimal("0.01"))
         elif freq == "Bi-Weekly":
             self.visits_per_year = Decimal("26")
-            self.visits_per_month = (Decimal("26") / Decimal("12")).quantize(Decimal("0.01"))
         else:
             self.visits_per_year = Decimal("12")
-            self.visits_per_month = Decimal("1")
 
         end = self.end_date
         if self.status != self.STATUS_ACTIVE and not end:

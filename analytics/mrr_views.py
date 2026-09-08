@@ -22,6 +22,7 @@ from analytics.hub_models import HubPendingLockIn
 from analytics.mrr_models import (
     MrrBooking,
     compute_monthly_value,
+    hours_per_month,
     normalize_frequency,
 )
 
@@ -83,6 +84,9 @@ def serialize_booking(item: MrrBooking) -> dict:
         "visits_per_month": _money(item.visits_per_month),
         "visits_per_year": _money(item.visits_per_year),
         "hours_per_visit": _money(item.hours_per_visit) if item.hours_per_visit is not None else None,
+        "hours_per_month": _money(hours_per_month(item.hours_per_visit, item.visits_per_month))
+        if item.hours_per_visit is not None
+        else None,
         "visit_value": _money(item.visit_value),
         "monthly_value": _money(item.monthly_value),
         "yearly_value": _money(item.yearly_value),
@@ -237,6 +241,7 @@ def mrr_list(request):
             "filters": {
                 "statuses": [MrrBooking.STATUS_ACTIVE, MrrBooking.STATUS_INACTIVE, MrrBooking.STATUS_CANCELLED],
                 "frequencies": ["Weekly", "Bi-Weekly", "Monthly"],
+                "plan_types": ["Basic", "Detailed", "Custom"],
                 "contracts": sorted(
                     {c for c in MrrBooking.objects.exclude(contract="").values_list("contract", flat=True).distinct()}
                     or ["Residential", "Commercial"]
