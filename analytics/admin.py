@@ -9,6 +9,7 @@ from analytics.hub_models import (
     HubPendingLockIn,
     HubVisit,
 )
+from analytics.mrr_models import MrrBooking
 from analytics.models import Dashboard, KpiDefinition, MetricFact, Widget
 from analytics.pricing_models import (
     PricingAddon,
@@ -86,6 +87,23 @@ class HubVisitAdmin(admin.ModelAdmin):
 class HubAlertAdmin(admin.ModelAdmin):
     list_display = ("message", "active", "sort_order")
     list_filter = ("active",)
+
+
+@admin.register(MrrBooking)
+class MrrBookingAdmin(admin.ModelAdmin):
+    list_display = (
+        "name",
+        "status",
+        "frequency",
+        "visit_value",
+        "monthly_value",
+        "start_date",
+        "end_date",
+        "source",
+        "manual_override",
+    )
+    list_filter = ("status", "frequency", "contract", "source", "manual_override")
+    search_fields = ("name", "sales_person", "notes", "lockin_external_id")
 
 
 @admin.register(PricingSyncRun)

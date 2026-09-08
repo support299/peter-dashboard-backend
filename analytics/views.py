@@ -475,3 +475,7 @@ urlpatterns = [
     path("visits/", protect(visits)),
     path("filters/", protect(filter_options)),
 ]
+
+from analytics.mrr_views import urlpatterns as mrr_urlpatterns  # noqa: E402
+
+urlpatterns = urlpatterns + mrr_urlpatterns

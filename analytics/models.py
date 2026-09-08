@@ -9,6 +9,7 @@ from analytics.hub_models import (  # noqa: F401
     HubPendingLockIn,
     HubVisit,
 )
+from analytics.mrr_models import MrrBooking  # noqa: F401
 from analytics.pricing_models import (  # noqa: F401
     PricingAddon,
     PricingBundle,
