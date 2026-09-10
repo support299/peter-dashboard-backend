@@ -21,6 +21,7 @@ from accounts.authz import protect
 from analytics.hub_models import HubPendingLockIn
 from analytics.mrr_models import (
     MrrBooking,
+    avg_hourly_rate,
     compute_monthly_value,
     hours_per_month,
     normalize_frequency,
@@ -72,6 +73,8 @@ def _normalize_status(raw: str) -> str:
 
 
 def serialize_booking(item: MrrBooking) -> dict:
+    hourly = avg_hourly_rate(item.visit_value, item.hours_per_visit)
+    monthly_hours = hours_per_month(item.hours_per_visit, item.visits_per_month)
     return {
         "id": item.id,
         "name": item.name,
@@ -84,9 +87,8 @@ def serialize_booking(item: MrrBooking) -> dict:
         "visits_per_month": _money(item.visits_per_month),
         "visits_per_year": _money(item.visits_per_year),
         "hours_per_visit": _money(item.hours_per_visit) if item.hours_per_visit is not None else None,
-        "hours_per_month": _money(hours_per_month(item.hours_per_visit, item.visits_per_month))
-        if item.hours_per_visit is not None
-        else None,
+        "hours_per_month": _money(monthly_hours) if monthly_hours is not None else None,
+        "avg_hourly_rate": _money(hourly) if hourly is not None else None,
         "visit_value": _money(item.visit_value),
         "monthly_value": _money(item.monthly_value),
         "yearly_value": _money(item.yearly_value),

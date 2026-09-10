@@ -85,6 +85,16 @@ def hours_per_month(hours_per_visit, visits_per_month) -> Decimal | None:
     return (_d(hours_per_visit) * _d(visits_per_month)).quantize(TWOPLACES, rounding=ROUND_HALF_UP)
 
 
+def avg_hourly_rate(visit_value, hours_per_visit) -> Decimal | None:
+    """Visit value ÷ hours per visit."""
+    if hours_per_visit is None or hours_per_visit == "":
+        return None
+    hours = _d(hours_per_visit)
+    if hours <= 0:
+        return None
+    return (_d(visit_value) / hours).quantize(TWOPLACES, rounding=ROUND_HALF_UP)
+
+
 class MrrBooking(models.Model):
     STATUS_ACTIVE = "Active"
     STATUS_INACTIVE = "Inactive"
