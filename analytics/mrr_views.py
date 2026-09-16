@@ -155,6 +155,19 @@ def _apply_booking_payload(booking: MrrBooking, body: dict, *, mark_manual=False
     return booking
 
 
+def _avg_hourly_for_contract(qs, contract_name: str):
+    """Mean of (visit value ÷ hours/visit) for bookings with hours set."""
+    rates = []
+    for item in qs.filter(contract__iexact=contract_name):
+        rate = avg_hourly_rate(item.visit_value, item.hours_per_visit)
+        if rate is not None:
+            rates.append(rate)
+    if not rates:
+        return None, 0
+    avg = (sum(rates) / Decimal(len(rates))).quantize(Decimal("0.01"))
+    return avg, len(rates)
+
+
 def _kpi_payload(qs, request):
     start = _parse_date(request.GET.get("from"))
     end = _parse_date(request.GET.get("to"))
@@ -187,6 +200,9 @@ def _kpi_payload(qs, request):
         )
     lost_mrr = lost_qs.aggregate(total=Sum("monthly_value"))["total"] or Decimal("0")
 
+    res_avg, res_count = _avg_hourly_for_contract(active_qs, "Residential")
+    com_avg, com_count = _avg_hourly_for_contract(active_qs, "Commercial")
+
     return {
         "active_mrr": _money(active_mrr),
         "new_mrr": _money(new_mrr),
@@ -195,6 +211,10 @@ def _kpi_payload(qs, request):
         "active_count": active_qs.count(),
         "new_count": new_qs.count(),
         "lost_count": lost_qs.count(),
+        "avg_hourly_residential": _money(res_avg) if res_avg is not None else None,
+        "avg_hourly_commercial": _money(com_avg) if com_avg is not None else None,
+        "avg_hourly_residential_count": res_count,
+        "avg_hourly_commercial_count": com_count,
     }
 
 
