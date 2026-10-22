@@ -213,3 +213,101 @@ class HubAlert(models.Model):
 
     def __str__(self):
         return (self.message or self.external_id)[:80]
+
+
+class HubReview(models.Model):
+    """Hub feedback forms ("How are we doing?", "Review your recent experience!") and Google reviews (via GoHighLevel)."""
+
+    SOURCE_GOOGLE = "google"
+
+    external_id = models.CharField(max_length=120, unique=True, db_index=True)
+    source = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    form_slug = models.CharField(max_length=120, blank=True, default="")
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    submitted_date = models.DateField(null=True, blank=True, db_index=True)  # local date, for period filters
+    client_name = models.CharField(max_length=255, blank=True, default="")
+    client_email = models.CharField(max_length=255, blank=True, default="")
+    client_jobber_id = models.CharField(max_length=160, blank=True, default="", db_index=True)
+    rating = models.PositiveSmallIntegerField(null=True, blank=True)
+    recommend_rating = models.PositiveSmallIntegerField(null=True, blank=True)
+    rebook_rating = models.PositiveSmallIntegerField(null=True, blank=True)
+    comment = models.TextField(blank=True, default="")
+    improvement_area = models.CharField(max_length=255, blank=True, default="")
+    service_area = models.CharField(max_length=255, blank=True, default="")
+    visit_date = models.DateField(null=True, blank=True)
+    cleaners = models.JSONField(default=list, blank=True)
+    source_payload = models.JSONField(default=dict, blank=True)
+    synced_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-submitted_at", "-id"]
+
+
+class HubComplaint(models.Model):
+    STATUS_OPEN = "open"
+    STATUS_IN_PROGRESS = "in_progress"
+    STATUS_RESOLVED = "resolved"
+
+    external_id = models.CharField(max_length=120, unique=True, db_index=True)
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    submitted_date = models.DateField(null=True, blank=True, db_index=True)
+    client_name = models.CharField(max_length=255, blank=True, default="")
+    client_email = models.CharField(max_length=255, blank=True, default="")
+    client_jobber_id = models.CharField(max_length=160, blank=True, default="", db_index=True)
+    incident_date = models.DateField(null=True, blank=True)
+    # incident date when given, else submission date — the day the complaint counts for.
+    event_date = models.DateField(null=True, blank=True, db_index=True)
+    team = models.JSONField(default=list, blank=True)
+    responsible = models.JSONField(default=list, blank=True)
+    complaint_type = models.CharField(max_length=120, blank=True, default="", db_index=True)
+    what_happened = models.TextField(blank=True, default="")
+    how_fixed = models.TextField(blank=True, default="")
+    status = models.CharField(max_length=32, blank=True, default="", db_index=True)
+    resolved_date = models.DateField(null=True, blank=True)
+    source_payload = models.JSONField(default=dict, blank=True)
+    synced_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-event_date", "-id"]
+
+
+class HubServiceCancellation(models.Model):
+    """Hub "Service Cancellation Form": why a client cancelled their recurring service."""
+
+    external_id = models.CharField(max_length=120, unique=True, db_index=True)
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    submitted_date = models.DateField(null=True, blank=True, db_index=True)
+    client_name = models.CharField(max_length=255, blank=True, default="")
+    client_email = models.CharField(max_length=255, blank=True, default="")
+    client_jobber_id = models.CharField(max_length=160, blank=True, default="", db_index=True)
+    frequency = models.CharField(max_length=64, blank=True, default="")
+    plan_type = models.CharField(max_length=64, blank=True, default="")
+    reason = models.CharField(max_length=255, blank=True, default="", db_index=True)
+    sub_reasons = models.JSONField(default=list, blank=True)
+    sub_reasons_by_group = models.JSONField(default=dict, blank=True)
+    comments = models.TextField(blank=True, default="")
+    source_payload = models.JSONField(default=dict, blank=True)
+    synced_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-submitted_at", "-id"]
+
+
+class HubWorkHours(models.Model):
+    """One employee-day of hours (Jobber timesheets pushed into the Hub; overtime computed by the Hub)."""
+
+    external_id = models.CharField(max_length=120, unique=True, db_index=True)
+    date = models.DateField(db_index=True)
+    employee_external_id = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    employee_name = models.CharField(max_length=255, blank=True, default="")
+    jobber_user_id = models.CharField(max_length=160, blank=True, default="", db_index=True)
+    hours_worked = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+    regular_hours = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+    drive_time_hours = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+    overtime_hours = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+    source = models.CharField(max_length=32, blank=True, default="")
+    source_payload = models.JSONField(default=dict, blank=True)
+    synced_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-date", "employee_name"]

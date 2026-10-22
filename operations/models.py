@@ -149,6 +149,10 @@ class Invoice(SourceRecord):
     deposit_amount = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
     discount_amount = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
     jobber_web_uri = models.CharField(max_length=1000, blank=True, default="")
+    # Set by operations.revenue.classify_invoice: main division of the invoice and
+    # subtotal minus discount (before tax).
+    division = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    net_revenue = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
 
     class Meta:
         constraints = [SourceRecord.unique_constraint("uniq_invoice_ext")]
@@ -173,6 +177,7 @@ class Visit(SourceRecord):
     is_first_visit = models.BooleanField(default=False, db_index=True)
     is_first_clean = models.BooleanField(default=False, db_index=True)
     is_deep_clean = models.BooleanField(default=False, db_index=True)
+    is_touch_up = models.BooleanField(default=False, db_index=True)
     all_day = models.BooleanField(default=False)
     duration_minutes = models.IntegerField(null=True, blank=True)
     start_at = models.DateTimeField(null=True, blank=True)
@@ -231,6 +236,10 @@ class InvoiceLineItem(SourceRecord):
     quantity = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True)
     unit_price = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
     total = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    # Set by operations.revenue.classify_invoice.
+    division = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    revenue_category = models.CharField(max_length=32, blank=True, default="", db_index=True)
+    net_total = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
 
     class Meta:
         constraints = [SourceRecord.unique_constraint("uniq_invoice_line_item_ext")]
@@ -240,8 +249,49 @@ DIVISION_CHOICES = [
     ("residential", "Residential"),
     ("commercial", "Commercial"),
     ("specialized", "Specialized Services"),
-    ("rentals", "Rentals"),
+    ("rentals", "Equipment Rentals"),
 ]
+
+REVENUE_RESIDENTIAL_RECURRING = "residential_recurring"
+REVENUE_FIRST_DEEP = "first_deep"
+REVENUE_MOVE = "move"
+REVENUE_RESIDENTIAL_OTHER = "residential_other"
+REVENUE_COMMERCIAL = "commercial"
+REVENUE_SPECIALIZED = "specialized"
+REVENUE_RENTALS = "rentals"
+REVENUE_OTHER = "other"
+REVENUE_CATEGORY_CHOICES = [
+    (REVENUE_RESIDENTIAL_RECURRING, "Residential recurring"),
+    (REVENUE_FIRST_DEEP, "First / deep cleans"),
+    (REVENUE_MOVE, "Move-in / move-out"),
+    (REVENUE_RESIDENTIAL_OTHER, "Other residential"),
+    (REVENUE_COMMERCIAL, "Commercial"),
+    (REVENUE_SPECIALIZED, "Specialized services"),
+    (REVENUE_RENTALS, "Equipment rentals"),
+    (REVENUE_OTHER, "Tips, fees & other"),
+]
+
+CANCELLATION_REASON_CHOICES = [
+    ("client_cancellation", "Client cancellation"),
+    ("client_unavailable", "Client unavailable"),
+    ("no_access", "No access"),
+    ("employee_absence", "Employee absence"),
+    ("company_scheduling", "Company scheduling issue"),
+    ("weather", "Weather"),
+    ("rescheduled", "Rescheduled"),
+    ("other", "Other"),
+]
+# Who caused the cancellation — lets management split customer vs internal problems.
+CANCELLATION_REASON_GROUPS = {
+    "client_cancellation": "customer",
+    "client_unavailable": "customer",
+    "no_access": "customer",
+    "employee_absence": "internal",
+    "company_scheduling": "internal",
+    "weather": "external",
+    "rescheduled": "other",
+    "other": "other",
+}
 
 CANCELLATION_VISIT = "cancelled_visit"
 CANCELLATION_JOB = "cancelled_job"
@@ -266,6 +316,28 @@ class DivisionRule(models.Model):
 
     def __str__(self):
         return f"{self.keyword} → {self.division}"
+
+
+class LineItemRule(models.Model):
+    """Editable line-item keyword → division + revenue category (Admin).
+
+    Keywords match whole words in the line item name (accents ignored). An empty
+    division/category means "inherit from the invoice's main service".
+    """
+
+    keyword = models.CharField(max_length=120)
+    division = models.CharField(max_length=64, blank=True, default="", choices=DIVISION_CHOICES)
+    revenue_category = models.CharField(max_length=32, blank=True, default="", choices=REVENUE_CATEGORY_CHOICES)
+    priority = models.IntegerField(default=100)
+    active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["priority", "keyword"]
+
+    def __str__(self):
+        return f"{self.keyword} → {self.division or 'inherit'} / {self.revenue_category or 'context'}"
 
 
 class ServiceTypeMapping(models.Model):
@@ -327,6 +399,12 @@ class CancellationRecord(models.Model):
     division = models.CharField(max_length=64, blank=True, default="", db_index=True)
     is_lost_client = models.BooleanField(default=False)
     notes = models.TextField(blank=True, default="")
+    reason = models.CharField(max_length=32, blank=True, default="", choices=CANCELLATION_REASON_CHOICES, db_index=True)
+    reason_notes = models.TextField(blank=True, default="")
+    reason_updated_at = models.DateTimeField(null=True, blank=True)
+    reason_updated_by = models.ForeignKey(
+        "auth.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
     source_payload = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

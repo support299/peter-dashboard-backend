@@ -10,10 +10,14 @@ from analytics.hub_models import (
     AdminInternalSyncRun,
     HubAlert,
     HubBonus,
+    HubComplaint,
     HubEmployee,
     HubLeaveRequest,
     HubPendingLockIn,
+    HubReview,
+    HubServiceCancellation,
     HubVisit,
+    HubWorkHours,
 )
 from analytics.parsing import as_dict, as_list, parse_d, parse_decimal, parse_dt
 
@@ -261,6 +265,189 @@ def _upsert_alerts(rows):
     return seen
 
 
+def _local_date(dt):
+    return timezone.localtime(dt).date() if dt else None
+
+
+def _int_or_none(value):
+    try:
+        return int(value) if value not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _people(value):
+    return [
+        {"id": person.get("id"), "name": person.get("name") or "", "jobber_user_id": person.get("jobber_user_id")}
+        for person in as_list(value)
+        if isinstance(person, dict)
+    ]
+
+
+def _upsert_reviews(rows):
+    seen = set()
+    for row in rows:
+        external_id = str(row.get("id") or "").strip()
+        if not external_id:
+            continue
+        seen.add(external_id)
+        submitted = parse_dt(row.get("submitted_at"))
+        HubReview.objects.update_or_create(
+            external_id=external_id,
+            defaults={
+                "source": row.get("source") or "",
+                "form_slug": row.get("form_slug") or "",
+                "submitted_at": submitted,
+                "submitted_date": _local_date(submitted),
+                "client_name": row.get("client_name") or "",
+                "client_email": row.get("client_email") or "",
+                "client_jobber_id": row.get("client_jobber_id") or "",
+                "rating": _int_or_none(row.get("rating")),
+                "recommend_rating": _int_or_none(row.get("recommend_rating")),
+                "rebook_rating": _int_or_none(row.get("rebook_rating")),
+                "comment": row.get("comment") or "",
+                "improvement_area": (row.get("improvement_area") or "")[:255],
+                "service_area": (row.get("service_area") or "")[:255],
+                "visit_date": parse_d(row.get("visit_date")),
+                "cleaners": _people(row.get("cleaners")),
+                "source_payload": row,
+            },
+        )
+    return seen
+
+
+def _upsert_complaints(rows):
+    seen = set()
+    for row in rows:
+        external_id = str(row.get("id") or "").strip()
+        if not external_id:
+            continue
+        seen.add(external_id)
+        submitted = parse_dt(row.get("submitted_at"))
+        incident = parse_d(row.get("incident_date"))
+        HubComplaint.objects.update_or_create(
+            external_id=external_id,
+            defaults={
+                "submitted_at": submitted,
+                "submitted_date": _local_date(submitted),
+                "client_name": row.get("client_name") or "",
+                "client_email": row.get("client_email") or "",
+                "client_jobber_id": row.get("client_jobber_id") or "",
+                "incident_date": incident,
+                "event_date": incident or _local_date(submitted),
+                "team": _people(row.get("team")),
+                "responsible": _people(row.get("responsible")),
+                "complaint_type": (row.get("type") or "")[:120],
+                "what_happened": row.get("what_happened") or "",
+                "how_fixed": row.get("how_fixed") or "",
+                "status": row.get("status") or "",
+                "resolved_date": parse_d(row.get("resolved_date")),
+                "source_payload": row,
+            },
+        )
+    return seen
+
+
+def _upsert_service_cancellations(rows):
+    seen = set()
+    for row in rows:
+        external_id = str(row.get("id") or "").strip()
+        if not external_id:
+            continue
+        seen.add(external_id)
+        submitted = parse_dt(row.get("submitted_at"))
+        HubServiceCancellation.objects.update_or_create(
+            external_id=external_id,
+            defaults={
+                "submitted_at": submitted,
+                "submitted_date": _local_date(submitted),
+                "client_name": row.get("client_name") or "",
+                "client_email": row.get("client_email") or "",
+                "client_jobber_id": row.get("client_jobber_id") or "",
+                "frequency": row.get("frequency") or "",
+                "plan_type": row.get("plan_type") or "",
+                "reason": (row.get("reason") or "")[:255],
+                "sub_reasons": as_list(row.get("sub_reasons")),
+                "sub_reasons_by_group": as_dict(row.get("sub_reasons_by_group")),
+                "comments": row.get("comments") or "",
+                "source_payload": row,
+            },
+        )
+    return seen
+
+
+def _upsert_work_hours(rows):
+    seen = set()
+    for row in rows:
+        external_id = str(row.get("id") or "").strip()
+        day = parse_d(row.get("date"))
+        if not external_id or not day:
+            continue
+        seen.add(external_id)
+        HubWorkHours.objects.update_or_create(
+            external_id=external_id,
+            defaults={
+                "date": day,
+                "employee_external_id": str(row.get("employee_id") or ""),
+                "employee_name": row.get("employee_name") or "",
+                "jobber_user_id": row.get("jobber_user_id") or "",
+                "hours_worked": parse_decimal(row.get("hours_worked"), ZERO),
+                "regular_hours": parse_decimal(row.get("regular_hours"), ZERO),
+                "drive_time_hours": parse_decimal(row.get("drive_time_hours"), ZERO),
+                "overtime_hours": parse_decimal(row.get("overtime_hours"), ZERO),
+                "source": row.get("source") or "",
+                "source_payload": row,
+            },
+        )
+    return seen
+
+
+def _prune_window(model, date_field, keep_ids, rows, row_date, meta):
+    """
+    Remove records the Hub no longer has, but only inside the date range this
+    payload covers (meta from/to, else the dates of the rows received), so a
+    narrower response never deletes older history.
+    """
+    start, end = parse_d(meta.get("from")), parse_d(meta.get("to"))
+    if not (start and end):
+        dates = [d for d in (row_date(row) for row in rows) if d]
+        if not dates:
+            return 0
+        start, end = min(dates), max(dates)
+    qs = model.objects.filter(**{f"{date_field}__gte": start, f"{date_field}__lte": end})
+    deleted, _ = qs.exclude(external_id__in=keep_ids).delete()
+    return deleted
+
+
+def _submitted_day(row):
+    return _local_date(parse_dt(row.get("submitted_at")))
+
+
+HUB_FORM_SECTIONS = [
+    ("reviews", HubReview, "submitted_date", _upsert_reviews, _submitted_day),
+    ("complaints", HubComplaint, "submitted_date", _upsert_complaints, _submitted_day),
+    ("service_cancellations", HubServiceCancellation, "submitted_date", _upsert_service_cancellations, _submitted_day),
+    ("work_hours", HubWorkHours, "date", _upsert_work_hours, lambda row: parse_d(row.get("date"))),
+]
+
+
+def _persist_hub_forms(payload, meta):
+    """Reviews, complaints, service cancellations and work hours (added Oct 2026)."""
+    counts, summary = {}, {}
+    for key, model, date_field, upsert, row_date in HUB_FORM_SECTIONS:
+        section = as_dict(payload.get(key))
+        if not section.get("available"):
+            continue  # older Hub version or section switched off: keep what we have
+        rows = as_list(section.get("records"))
+        ids = upsert(rows)
+        _prune_window(model, date_field, ids, rows, row_date, meta)
+        counts[key] = len(ids)
+        summary[key] = as_dict(section.get("summary"))
+        if key == "work_hours":
+            summary[key]["overtime_rule"] = section.get("overtime_rule") or ""
+    return counts, summary
+
+
 def _prune(model, keep_ids):
     if not keep_ids:
         deleted, _ = model.objects.all().delete()
@@ -286,6 +473,7 @@ def persist_payload(payload, sync_run: AdminInternalSyncRun):
         bonus_ids = _upsert_bonuses(as_list(lock_section.get("bonuses")))
         visit_ids = _upsert_visits(as_list(lock_section.get("visits")))
         alert_ids = _upsert_alerts(as_list(as_dict(workflows.get("alerts")).get("items")))
+        form_counts, form_summary = _persist_hub_forms(payload, meta)
 
         _prune(HubEmployee, emp_ids)
         _prune(HubLeaveRequest, leave_ids)
@@ -315,6 +503,7 @@ def persist_payload(payload, sync_run: AdminInternalSyncRun):
                 "employee_performance": performance_section.get("note") or "",
                 "custom_kpis": custom_kpis.get("note") or "",
             },
+            **form_summary,
         }
         sync_run.counts = {
             "employees": len(emp_ids),
@@ -323,6 +512,7 @@ def persist_payload(payload, sync_run: AdminInternalSyncRun):
             "bonuses": len(bonus_ids),
             "visits": len(visit_ids),
             "alerts": len(alert_ids),
+            **form_counts,
         }
         sync_run.status = AdminInternalSyncRun.STATUS_SUCCESS
         sync_run.finished_at = timezone.now()

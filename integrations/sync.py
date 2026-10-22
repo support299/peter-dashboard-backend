@@ -9,6 +9,7 @@ from analytics.models import KpiDefinition, MetricFact
 from integrations.client import JobberAPIError, JobberClient
 from integrations.mapping import (
     classify_title,
+    is_touch_up_title,
     clip,
     clean_name,
     format_street,
@@ -237,6 +238,7 @@ class JobberSyncService:
             cancel_stats = process_all_cancellation_tasks(self.integration)
             self._record("cancellations_created", cancel_stats.get("created", 0))
             self._rebuild_metric_facts()
+            self._rebuild_insights()
             run.status = SyncRun.STATUS_SUCCESS
             run.error_message = ""
             self.integration.last_synced_at = timezone.now()
@@ -626,6 +628,7 @@ class JobberSyncService:
                 "is_first_visit": bool(job and job.first_visit_external_id == node["id"]),
                 "is_first_clean": first_clean or bool(job and job.first_visit_external_id == node["id"] and job.is_first_clean),
                 "is_deep_clean": deep_clean,
+                "is_touch_up": is_touch_up_title(title),
                 "all_day": bool(node.get("allDay")),
                 "duration_minutes": node.get("duration"),
                 "start_at": parse_dt(node.get("startAt")),
@@ -847,6 +850,16 @@ class JobberSyncService:
         )
         if first_ids:
             Visit.objects.filter(integration=self.integration, external_id__in=first_ids).update(is_first_visit=True)
+
+    def _rebuild_insights(self):
+        from insights.rebuild import rebuild_insights
+
+        try:
+            stats = rebuild_insights(self.integration)
+            self._record("recurring_plans", stats["mrr"]["plans"])
+        except Exception:
+            logger.exception("Master Dashboard rebuild failed (Jobber sync itself succeeded)")
+            self._record("insights_rebuild_failed", 1)
 
     def _seed_kpis(self):
         for spec in DEFAULT_KPIS:

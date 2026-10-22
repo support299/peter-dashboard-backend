@@ -50,6 +50,7 @@ INSTALLED_APPS = [
     "integrations",
     "operations",
     "analytics",
+    "insights",
 ]
 
 MIDDLEWARE = [
@@ -102,7 +103,8 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 LANGUAGE_CODE = "en-us"
-TIME_ZONE = "UTC"
+# Reports group by Quebec local dates (month boundaries). Celery crontabs carry their own UTC timezone.
+TIME_ZONE = "America/Toronto"
 USE_I18N = True
 USE_TZ = True
 
@@ -210,7 +212,7 @@ CELERY_CACHE_BACKEND = "django-cache"
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
-CELERY_TIMEZONE = TIME_ZONE
+CELERY_TIMEZONE = "UTC"
 CELERY_ENABLE_UTC = True
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 60 * 60

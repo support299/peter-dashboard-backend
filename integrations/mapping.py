@@ -1,3 +1,4 @@
+import re
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
@@ -14,6 +15,7 @@ TITLE_FIRST_CLEAN = (
     "move-in",
 )
 TITLE_DEEP_CLEAN = ("deep clean", "deep-clean", "deepclean")
+TOUCH_UP_RE = re.compile(r"touch[- ]?ups?", re.IGNORECASE)
 CANCELLED_STATUSES = {"CANCELLED", "CANCELED"}
 COMPLETED_STATUSES = {"COMPLETED", "COMPLETE", "DONE"}
 RECURRING_TYPES = {"RECURRING", "RECURRING_JOB", "REPEAT", "REPEATING"}
@@ -103,6 +105,11 @@ def classify_title(title: str | None) -> tuple[bool, bool]:
     is_first = any(token in text for token in TITLE_FIRST_CLEAN)
     is_deep = any(token in text for token in TITLE_DEEP_CLEAN)
     return is_first, is_deep
+
+
+def is_touch_up_title(title: str | None) -> bool:
+    """Redo / satisfaction-guarantee visits are titled "Touch-up" or "Touch up"."""
+    return bool(TOUCH_UP_RE.search(title or ""))
 
 
 def is_recurring_type(job_type: str | None) -> bool:

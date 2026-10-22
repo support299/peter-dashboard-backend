@@ -4,10 +4,14 @@ from analytics.hub_models import (  # noqa: F401
     AdminInternalSyncRun,
     HubAlert,
     HubBonus,
+    HubComplaint,
     HubEmployee,
     HubLeaveRequest,
     HubPendingLockIn,
+    HubReview,
+    HubServiceCancellation,
     HubVisit,
+    HubWorkHours,
 )
 from analytics.mrr_models import MrrBooking  # noqa: F401
 from analytics.pricing_models import (  # noqa: F401

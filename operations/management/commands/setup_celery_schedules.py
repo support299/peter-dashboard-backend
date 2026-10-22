@@ -16,8 +16,9 @@ class Command(BaseCommand):
             {
                 "name": "Daily Admin Internal sync",
                 "task": "analytics.tasks.sync_admin_internal",
-                "hour": "22",
-                "minute": "45",
+                # After the Hub's ~08:30 UTC push of Jobber timesheet hours.
+                "hour": "9",
+                "minute": "0",
             },
             {
                 "name": "Daily Pricing Calculator sync",

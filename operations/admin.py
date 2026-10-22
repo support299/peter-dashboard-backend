@@ -5,6 +5,7 @@ from operations.models import (
     Client,
     CustomerFeedback,
     DivisionRule,
+    LineItemRule,
     Employee,
     GoogleReview,
     Invoice,
@@ -74,6 +75,14 @@ class DivisionRuleAdmin(admin.ModelAdmin):
     list_display = ("keyword", "division", "priority", "active")
     list_editable = ("priority", "active")
     list_filter = ("division", "active")
+
+
+@admin.register(LineItemRule)
+class LineItemRuleAdmin(admin.ModelAdmin):
+    list_display = ("keyword", "division", "revenue_category", "priority", "active")
+    list_editable = ("division", "revenue_category", "priority", "active")
+    list_filter = ("division", "revenue_category", "active")
+    search_fields = ("keyword",)
 
 
 @admin.register(JobberTask)
