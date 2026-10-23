@@ -18,8 +18,8 @@ from django.utils import timezone
 from analytics.hub_models import HubComplaint, HubLeaveRequest, HubReview, HubServiceCancellation, HubWorkHours
 from insights.explanations import HOW
 from insights.models import PRICING_INVOICE, RecurringPlan, STATUS_CANCELLED
-from insights.mrr import movements
-from insights.periods import Period, aware
+from insights.mrr import movements, tracking_month
+from insights.periods import Period, add_months, aware
 from operations.models import (
     CANCELLATION_JOB,
     CANCELLATION_REASON_GROUPS,
@@ -459,6 +459,9 @@ class Metrics(HubMetrics):
         return payload
 
     def _unavailable_note(self, key):
+        if key in ("mrr_expansion", "mrr_contraction"):
+            start = add_months(tracking_month(), 1)
+            return f"Price and frequency changes are tracked from {_day(start)}, the first full month after tracking started."
         if key.startswith("cancel"):
             start = self.data_starts().get("cancellations")
             return f"Cancellation records start on {_day(start)}." if start else "No cancellation records yet."
