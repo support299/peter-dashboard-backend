@@ -264,7 +264,7 @@ def mrr_plans(request):
     integration = _integration()
     if not integration:
         return _no_integration()
-    qs = RecurringPlan.objects.filter(integration=integration).exclude(client__is_internal=True).select_related("job")
+    qs = RecurringPlan.objects.filter(integration=integration).exclude(client__is_internal=True).select_related("job", "client")
     division = request.GET.get("division") or ""
     if division in DIVISION_KEYS:
         qs = qs.filter(division=division)
@@ -311,7 +311,7 @@ def _date(value):
 @require_http_methods(["PATCH"])
 def mrr_plan_update(request, pk):
     integration = _integration()
-    plan = RecurringPlan.objects.filter(integration=integration, pk=pk).select_related("job").first()
+    plan = RecurringPlan.objects.filter(integration=integration, pk=pk).select_related("job", "client").first()
     if not plan:
         return error("Plan not found.", status=404)
     body = _body(request)

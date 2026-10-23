@@ -238,7 +238,8 @@ def plan_row(plan: RecurringPlan) -> dict:
         "manual_note": plan.manual_note,
         "start_date": plan.start_date,
         "end_date": plan.end_date,
-        "link": plan.job.jobber_web_uri if plan.job_id else "",
+        # Jobs are synced without their Jobber link, so fall back to the client's Jobber page.
+        "link": (plan.job.jobber_web_uri if plan.job_id else "") or (plan.client.jobber_web_uri if plan.client_id else ""),
     }
 
 
@@ -262,19 +263,19 @@ def _effective(qs, statuses):
 
 def _plans(title, statuses):
     def handler(metrics, period, **_):
-        qs = _effective(metrics.plans().select_related("job"), statuses).order_by("name")
+        qs = _effective(metrics.plans().select_related("job", "client"), statuses).order_by("name")
         return _result(title, PLAN_COLUMNS, [plan_row(p) for p in qs], editable="plans")
 
     return handler
 
 
 def _new_recurring_jobs(metrics, period, **_):
-    qs = metrics.plans().select_related("job").filter(start_date__gte=period.start, start_date__lte=period.end).order_by("start_date")
+    qs = metrics.plans().select_related("job", "client").filter(start_date__gte=period.start, start_date__lte=period.end).order_by("start_date")
     return _result("New recurring jobs", PLAN_COLUMNS, [plan_row(p) for p in qs], editable="plans")
 
 
 def _cancelled_recurring_jobs(metrics, period, **_):
-    qs = _effective(metrics.plans().select_related("job"), [STATUS_CANCELLED]).filter(
+    qs = _effective(metrics.plans().select_related("job", "client"), [STATUS_CANCELLED]).filter(
         end_date__gte=period.start, end_date__lte=period.end
     )
     return _result("Cancelled recurring jobs", PLAN_COLUMNS, [plan_row(p) for p in qs.order_by("end_date")], editable="plans")
