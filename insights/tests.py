@@ -550,3 +550,10 @@ class PricingAndInternalTests(MasterDashboardDataMixin, TestCase):
         self.assertTrue(expected.filter(client=internal).exists())
         self.assertEqual(metrics.value("visits_completed", september), expected.exclude(client=internal).count())
         self.assertNotIn(internal.id, metrics.active_client_ids(date(2026, 9, 30)))
+
+
+class ExplanationTests(TestCase):
+    def test_every_number_explains_how_it_is_calculated(self):
+        from insights.metrics import KPIS
+
+        self.assertEqual([key for key, meta in KPIS.items() if not meta["how"]], [])

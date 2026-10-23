@@ -16,6 +16,7 @@ from django.db.models import Avg, Count, Min, Q, Sum
 from django.utils import timezone
 
 from analytics.hub_models import HubComplaint, HubLeaveRequest, HubReview, HubServiceCancellation, HubWorkHours
+from insights.explanations import HOW
 from insights.models import PRICING_INVOICE, RecurringPlan, STATUS_CANCELLED
 from insights.mrr import movements
 from insights.periods import Period, aware
@@ -125,6 +126,9 @@ KPIS = {
     "leads": kpi("Leads", kind="count", note=LEADS_NOTE),
     "lead_conversion": kpi("Lead → client conversion %", kind="percent", note=LEADS_NOTE),
 }
+
+for _key, _meta in KPIS.items():
+    _meta["how"] = HOW.get(_key, "")
 
 SCORECARD = [
     "revenue",
