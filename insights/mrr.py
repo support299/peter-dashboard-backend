@@ -164,6 +164,13 @@ def price_plan(visit_price, visits_per_month, invoices, end: date, start: date |
     return Decimal("0.00"), Decimal("0.00"), PRICING_NONE
 
 
+def _schedule_terms(upcoming: list, past: list):
+    """Price per visit and frequency as the schedule stood: the next visits first, else the last ones."""
+    price = _median_price([r.price for r in upcoming[:3]]) or _median_price([r.price for r in past[-3:]])
+    freq = frequency_from_dates([r.day for r in upcoming[:8]]) or frequency_from_dates([r.day for r in past[-8:]])
+    return price, freq
+
+
 def detect(job: Job, rows: list[VisitRow], today: date, invoices: list | None = None) -> Detection:
     rows = sorted(rows, key=lambda r: r.day)
     upcoming = [r for r in rows if r.day >= today and not r.complete]
@@ -179,10 +186,9 @@ def detect(job: Job, rows: list[VisitRow], today: date, invoices: list | None = 
         status = STATUS_CANCELLED
         end = last_past or (timezone.localtime(job.end_at).date() if job.end_at else start)
 
-    price = _median_price([r.price for r in upcoming[:3]]) or _median_price([r.price for r in past[-3:]])
+    price, freq = _schedule_terms(upcoming, past)
     if price is None:
         price = job.total if job.total and job.total > 0 else Decimal("0")
-    freq = frequency_from_dates([r.day for r in upcoming[:8]]) or frequency_from_dates([r.day for r in past[-8:]])
     label, per_month = freq or ("Monthly", Decimal(1))
     invoices = invoices or []
     monthly, shown_price, source = price_plan(price, per_month, invoices, min(today, end or today), start, rows)
@@ -279,18 +285,21 @@ def _log_changes(plan: RecurringPlan, det: Detection, today: date, changes: list
 
 
 def _history_value(det: Detection, month: date, today: date, carry):
-    """MRR for a month before tracking started, priced the same way as today (visits or invoices)."""
-    lo, hi = month, month_end(month)
+    """
+    MRR at the end of a month before tracking started, read the same way as today:
+    from invoices, or from the visits scheduled after that month end (as today's value
+    is read from the visits after today). A client whose schedule didn't change gets
+    the same value in every month, so only real price/frequency changes show up.
+    """
+    hi = month_end(month)
     if det.pricing_source == PRICING_INVOICE:
         billed = invoiced_monthly(det.invoices, min(hi, today), det.start_date)
         if billed:
             _, latest, per_month, _ = billed
             return _q(latest * per_month), (latest, per_month)
         return (_q(carry[0] * carry[1]), carry) if carry else (det.monthly_value, (det.visit_value, Decimal(1)))
-    prices = [r.price for r in det.rows if lo <= r.day <= hi]
-    price = _median_price(prices) or (carry[0] if carry else None) or det.visit_value
-    window = [r.day for r in det.rows if lo - timedelta(days=45) <= r.day <= min(hi + timedelta(days=45), today)]
-    freq = frequency_from_dates(window)
+    price, freq = _schedule_terms([r for r in det.rows if r.day > hi], [r for r in det.rows if r.day <= hi])
+    price = price or (carry[0] if carry else None) or det.visit_value
     per_month = freq[1] if freq else (carry[1] if carry else det.visits_per_month)
     return _q(Decimal(price) * per_month), (price, per_month)
 
