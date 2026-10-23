@@ -468,7 +468,7 @@ class Metrics(HubMetrics):
             invoice__integration=self.integration,
             invoice__issued_date__gte=period.start_dt,
             invoice__issued_date__lt=period.end_dt,
-        ).exclude(invoice__invoice_status="draft")
+        ).exclude(invoice__invoice_status="draft").exclude(invoice__client__is_internal=True)
         if self.division:
             qs = qs.filter(division=self.division)
         return qs
@@ -524,7 +524,11 @@ class Metrics(HubMetrics):
         return self._top_share(period, 10)
 
     def _receivables(self):
-        qs = Invoice.objects.filter(integration=self.integration, balance__gt=0).exclude(invoice_status__in=["draft", "bad_debt"])
+        qs = (
+            Invoice.objects.filter(integration=self.integration, balance__gt=0)
+            .exclude(invoice_status__in=["draft", "bad_debt"])
+            .exclude(client__is_internal=True)
+        )
         if self.division:
             qs = qs.filter(division=self.division)
         return qs
@@ -538,7 +542,9 @@ class Metrics(HubMetrics):
 
     # ——— visits ———
     def _visits(self, period: Period):
-        qs = Visit.objects.filter(integration=self.integration, start_at__gte=period.start_dt, start_at__lt=period.end_dt)
+        qs = Visit.objects.filter(integration=self.integration, start_at__gte=period.start_dt, start_at__lt=period.end_dt).exclude(
+            client__is_internal=True
+        )
         if self.division:
             qs = qs.filter(division=self.division)
         return qs
@@ -577,7 +583,9 @@ class Metrics(HubMetrics):
             lo = aware(day - timedelta(days=ACTIVE_LOOKBACK_DAYS - 1))
             mid = aware(day + timedelta(days=1))
             hi = mid + timedelta(days=ACTIVE_LOOKAHEAD_DAYS)
-            qs = Visit.objects.filter(integration=self.integration, client__isnull=False, is_cancelled=False).filter(
+            qs = Visit.objects.filter(
+                integration=self.integration, client__isnull=False, client__is_internal=False, is_cancelled=False
+            ).filter(
                 Q(is_complete=True, start_at__gte=lo, start_at__lt=mid) | Q(start_at__gte=mid, start_at__lt=hi)
             )
             if self.division:
@@ -589,7 +597,7 @@ class Metrics(HubMetrics):
         key = ("first_visits",)
         if key not in self._cache:
             rows = (
-                Visit.objects.filter(integration=self.integration, client__isnull=False, is_complete=True)
+                Visit.objects.filter(integration=self.integration, client__isnull=False, client__is_internal=False, is_complete=True)
                 .values("client_id")
                 .annotate(first=Min("start_at"))
             )
@@ -710,7 +718,7 @@ class Metrics(HubMetrics):
         return _pct(kept, len(result.recurring_start))
 
     def plans(self):
-        qs = RecurringPlan.objects.filter(integration=self.integration)
+        qs = RecurringPlan.objects.filter(integration=self.integration).exclude(client__is_internal=True)
         if self.division:
             qs = qs.filter(division=self.division)
         return qs
@@ -732,7 +740,9 @@ class Metrics(HubMetrics):
 
     # ——— cancellations ———
     def cancellations(self, period: Period, kind=None):
-        qs = CancellationRecord.objects.filter(integration=self.integration, task_date__gte=period.start, task_date__lte=period.end)
+        qs = CancellationRecord.objects.filter(
+            integration=self.integration, task_date__gte=period.start, task_date__lte=period.end
+        ).exclude(client__is_internal=True)
         if kind:
             qs = qs.filter(cancellation_type=kind)
         if self.division:

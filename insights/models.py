@@ -16,6 +16,15 @@ PLAN_STATUS_CHOICES = [
     (STATUS_SCHEDULED_RESUME, "Scheduled to resume"),
     (STATUS_CANCELLED, "Cancelled"),
 ]
+PRICING_VISIT = "visit"
+PRICING_INVOICE = "invoice"
+PRICING_NONE = "none"
+PRICING_CHOICES = [
+    (PRICING_VISIT, "Visit price"),
+    (PRICING_INVOICE, "From invoices"),
+    (PRICING_NONE, "No price in Jobber"),
+]
+
 # Paused and scheduled-to-resume plans still count as recurring clients, but not in Active MRR.
 PAUSED_STATUSES = {STATUS_PAUSED, STATUS_SCHEDULED_RESUME}
 
@@ -55,6 +64,9 @@ class RecurringPlan(models.Model):
     visits_per_month = models.DecimalField(max_digits=8, decimal_places=4, default=0)
     visit_value = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     monthly_value = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    # Where the price came from: visit line items, or invoices when visits carry a fixed monthly
+    # price (or no price) — see insights.mrr.price_plan.
+    pricing_source = models.CharField(max_length=16, choices=PRICING_CHOICES, default=PRICING_VISIT, db_index=True)
     start_date = models.DateField(null=True, blank=True, db_index=True)
     end_date = models.DateField(null=True, blank=True, db_index=True)
     detected_status = models.CharField(max_length=32, choices=PLAN_STATUS_CHOICES, default=STATUS_ACTIVE, db_index=True)

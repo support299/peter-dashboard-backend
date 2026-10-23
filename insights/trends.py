@@ -75,12 +75,12 @@ def monthly_series(metrics: Metrics, key: str, first: date, last: date) -> dict:
     if key == "revenue":
         qs = InvoiceLineItem.objects.filter(
             invoice__integration=integration, invoice__issued_date__gte=lo, invoice__issued_date__lt=hi
-        ).exclude(invoice__invoice_status="draft")
+        ).exclude(invoice__invoice_status="draft").exclude(invoice__client__is_internal=True)
         if division:
             qs = qs.filter(division=division)
         return _by_month(qs, "invoice__issued_date", Sum("net_total"))
     if key in ("visits_completed", "touch_ups"):
-        qs = Visit.objects.filter(integration=integration, start_at__gte=lo, start_at__lt=hi)
+        qs = Visit.objects.filter(integration=integration, start_at__gte=lo, start_at__lt=hi).exclude(client__is_internal=True)
         qs = qs.filter(is_complete=True) if key == "visits_completed" else qs.filter(is_touch_up=True, is_cancelled=False)
         if division:
             qs = qs.filter(division=division)
@@ -88,7 +88,7 @@ def monthly_series(metrics: Metrics, key: str, first: date, last: date) -> dict:
     if key == "cancelled_visits_value":
         qs = CancellationRecord.objects.filter(
             integration=integration, cancellation_type=CANCELLATION_VISIT, task_date__gte=first, task_date__lt=add_months(last, 1)
-        )
+        ).exclude(client__is_internal=True)
         if division:
             qs = qs.filter(division=division)
         return _by_month(qs, "task_date", Sum("value"))

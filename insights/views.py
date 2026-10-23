@@ -22,6 +22,7 @@ from insights.metrics import KPIS, SCORECARD, Metrics, what_changed
 from insights.models import (
     PAUSED_STATUSES,
     PLAN_STATUS_CHOICES,
+    PRICING_NONE,
     STATUS_ACTIVE,
     MrrChange,
     RecurringPlan,
@@ -263,12 +264,16 @@ def mrr_plans(request):
     integration = _integration()
     if not integration:
         return _no_integration()
-    qs = RecurringPlan.objects.filter(integration=integration).select_related("job")
+    qs = RecurringPlan.objects.filter(integration=integration).exclude(client__is_internal=True).select_related("job")
     division = request.GET.get("division") or ""
     if division in DIVISION_KEYS:
         qs = qs.filter(division=division)
     status = request.GET.get("status") or "current"
-    if status == "current":
+    if status == "no_price":
+        qs = qs.filter(pricing_source=PRICING_NONE).filter(
+            Q(status_override__in=[STATUS_ACTIVE, *PAUSED_STATUSES]) | Q(status_override="", detected_status=STATUS_ACTIVE)
+        )
+    elif status == "current":
         qs = qs.filter(Q(status_override__in=[STATUS_ACTIVE, *PAUSED_STATUSES]) | Q(status_override="", detected_status=STATUS_ACTIVE))
     elif status in STATUS_KEYS:
         qs = qs.filter(Q(status_override=status) | Q(status_override="", detected_status=status))

@@ -26,9 +26,10 @@ class EmployeeAdmin(admin.ModelAdmin):
 
 @admin.register(Client)
 class ClientAdmin(admin.ModelAdmin):
-    list_display = ("name", "email", "division", "is_lead", "is_archived", "balance", "average_price_per_visit")
+    list_display = ("name", "email", "division", "is_lead", "is_archived", "is_internal", "balance", "average_price_per_visit")
+    list_editable = ("is_internal",)
     search_fields = ("name", "email", "company_name", "external_id")
-    list_filter = ("is_lead", "is_archived", "is_company", "division")
+    list_filter = ("is_internal", "is_lead", "is_archived", "is_company", "division")
 
 
 @admin.register(Property)

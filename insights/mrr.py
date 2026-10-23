@@ -28,6 +28,9 @@ from django.utils import timezone
 
 from insights.models import (
     PAUSED_STATUSES,
+    PRICING_INVOICE,
+    PRICING_NONE,
+    PRICING_VISIT,
     STATUS_ACTIVE,
     STATUS_CANCELLED,
     InsightsSetting,
@@ -36,7 +39,7 @@ from insights.models import (
     RecurringPlan,
 )
 from insights.periods import add_months, month_end, month_start, months_between
-from operations.models import Job, Visit
+from operations.models import Invoice, Job, Visit
 
 CENTS = Decimal("0.01")
 TRACKING_KEY = "mrr_tracking_start"
@@ -78,6 +81,16 @@ def frequency_from_dates(dates: list[date]):
     return f"Every {round(gap)} days", per_month
 
 
+# Invoices are compared with visit prices over this window (or since the job started, if newer).
+INVOICE_WINDOW_DAYS = 92
+DAYS_PER_MONTH = Decimal("30.4375")
+# Visit-based MRR this many times above what was really invoiced is not believable.
+OVERSTATED_RATIO = Decimal(3)
+# A visit price this close to a whole invoice, with several visits per invoice, means each
+# visit carries the monthly / fixed price (Globe Electric: $4,880 per visit, $4,880 per invoice).
+SAME_AS_INVOICE = Decimal("0.8")
+
+
 def _median_price(prices):
     prices = [p for p in prices if p is not None and p > 0]
     return Decimal(statistics.median(prices)) if prices else None
@@ -91,6 +104,12 @@ class VisitRow:
 
 
 @dataclass
+class InvoiceRow:
+    day: date
+    amount: Decimal
+
+
+@dataclass
 class Detection:
     start_date: date | None
     end_date: date | None
@@ -99,10 +118,53 @@ class Detection:
     frequency: str
     visits_per_month: Decimal
     monthly_value: Decimal
+    pricing_source: str = PRICING_VISIT
     rows: list = field(default_factory=list)
+    invoices: list = field(default_factory=list)
 
 
-def detect(job: Job, rows: list[VisitRow], today: date) -> Detection:
+def _window(end: date, start: date | None):
+    lo = end - timedelta(days=INVOICE_WINDOW_DAYS)
+    return max(lo, start) if start else lo
+
+
+def invoiced_monthly(invoices: list, end: date, start: date | None = None):
+    """
+    What the job was actually invoiced per month over the window ending `end`:
+    (average per month, latest invoice amount, invoices per month, invoice count), or None.
+    The latest invoice is the current price (Globe Electric: $4,520 in August, $4,880 since September).
+    """
+    lo = _window(end, start)
+    recent = sorted((i for i in invoices if lo < i.day <= end and i.amount and i.amount > 0), key=lambda i: i.day)
+    if not recent:
+        return None
+    amounts = [i.amount for i in recent]
+    months = max(Decimal((end - lo).days) / DAYS_PER_MONTH, Decimal(1))
+    per_month = Decimal(len(amounts)) / months
+    nearest = per_month.to_integral_value()
+    if nearest >= 1 and abs(per_month - nearest) <= Decimal("0.35"):
+        per_month = nearest  # three invoices in ~3 months = monthly billing
+    return _q(sum(amounts, Decimal(0)) / months), amounts[-1], per_month, len(amounts)
+
+
+def price_plan(visit_price, visits_per_month, invoices, end: date, start: date | None, visits=()):
+    """(monthly value, value shown as "price", pricing source) for a plan."""
+    visit_price = Decimal(visit_price or 0)
+    visit_monthly = _q(visit_price * visits_per_month)
+    billed = invoiced_monthly(invoices, end, start)
+    if billed:
+        average, latest, per_month, invoice_count = billed
+        lo = _window(end, start)
+        done = sum(1 for v in visits if v.complete and lo < v.day <= end)
+        fixed_price_on_visits = visit_price >= latest * SAME_AS_INVOICE and done >= 2 * invoice_count
+        if visit_monthly == 0 or fixed_price_on_visits or visit_monthly > average * OVERSTATED_RATIO:
+            return _q(latest * per_month), _q(latest), PRICING_INVOICE
+    if visit_monthly > 0:
+        return visit_monthly, _q(visit_price), PRICING_VISIT
+    return Decimal("0.00"), Decimal("0.00"), PRICING_NONE
+
+
+def detect(job: Job, rows: list[VisitRow], today: date, invoices: list | None = None) -> Detection:
     rows = sorted(rows, key=lambda r: r.day)
     upcoming = [r for r in rows if r.day >= today and not r.complete]
     past = [r for r in rows if not (r.day >= today and not r.complete)]
@@ -122,15 +184,19 @@ def detect(job: Job, rows: list[VisitRow], today: date) -> Detection:
         price = job.total if job.total and job.total > 0 else Decimal("0")
     freq = frequency_from_dates([r.day for r in upcoming[:8]]) or frequency_from_dates([r.day for r in past[-8:]])
     label, per_month = freq or ("Monthly", Decimal(1))
+    invoices = invoices or []
+    monthly, shown_price, source = price_plan(price, per_month, invoices, min(today, end or today), start, rows)
     return Detection(
         start_date=start,
         end_date=end,
         status=status,
-        visit_value=_q(price),
+        visit_value=shown_price,
         frequency=label,
         visits_per_month=per_month.quantize(Decimal("0.0001")),
-        monthly_value=_q(Decimal(price) * per_month),
+        monthly_value=monthly,
+        pricing_source=source,
         rows=rows,
+        invoices=invoices,
     )
 
 
@@ -156,6 +222,20 @@ def _visit_rows(integration, job_ids):
     )
     for job_id, start_at, price, complete in qs:
         rows[job_id].append(VisitRow(timezone.localtime(start_at).date(), price, bool(complete)))
+    return rows
+
+
+def _invoice_rows(integration, job_ids):
+    rows = defaultdict(list)
+    qs = (
+        Invoice.objects.filter(integration=integration, jobs__id__in=job_ids, issued_date__isnull=False)
+        .exclude(invoice_status="draft")
+        .values_list("jobs__id", "issued_date", "net_revenue", "subtotal")
+        .iterator(chunk_size=5000)
+    )
+    for job_id, issued, net, subtotal in qs:
+        amount = net if net is not None else subtotal
+        rows[job_id].append(InvoiceRow(timezone.localtime(issued).date(), Decimal(amount or 0)))
     return rows
 
 
@@ -199,8 +279,14 @@ def _log_changes(plan: RecurringPlan, det: Detection, today: date, changes: list
 
 
 def _history_value(det: Detection, month: date, today: date, carry):
-    """MRR for a month before tracking started: that month's visit prices × visit spacing around it."""
+    """MRR for a month before tracking started, priced the same way as today (visits or invoices)."""
     lo, hi = month, month_end(month)
+    if det.pricing_source == PRICING_INVOICE:
+        billed = invoiced_monthly(det.invoices, min(hi, today), det.start_date)
+        if billed:
+            _, latest, per_month, _ = billed
+            return _q(latest * per_month), (latest, per_month)
+        return (_q(carry[0] * carry[1]), carry) if carry else (det.monthly_value, (det.visit_value, Decimal(1)))
     prices = [r.price for r in det.rows if lo <= r.day <= hi]
     price = _median_price(prices) or (carry[0] if carry else None) or det.visit_value
     window = [r.day for r in det.rows if lo - timedelta(days=45) <= r.day <= min(hi + timedelta(days=45), today)]
@@ -220,14 +306,19 @@ def rebuild_mrr(integration, today: date | None = None) -> dict:
     today = today or timezone.localdate()
     current = month_start(today)
     track_month = tracking_month()
-    jobs = list(Job.objects.filter(integration=integration, is_recurring=True).select_related("client"))
+    # Internal jobs (team leader tasks, inventory restock…) are not revenue.
+    RecurringPlan.objects.filter(integration=integration, client__is_internal=True).delete()
+    jobs = list(
+        Job.objects.filter(integration=integration, is_recurring=True).exclude(client__is_internal=True).select_related("client")
+    )
     visits = _visit_rows(integration, [job.id for job in jobs])
+    invoices = _invoice_rows(integration, [job.id for job in jobs])
     existing = {plan.job_id: plan for plan in RecurringPlan.objects.filter(integration=integration)}
     now = timezone.now()
 
     changes, detections, plans = [], {}, []
     for job in jobs:
-        det = detect(job, visits.get(job.id, []), today)
+        det = detect(job, visits.get(job.id, []), today, invoices.get(job.id, []))
         plan = existing.get(job.id) or RecurringPlan(integration=integration, job=job)
         is_new = plan.pk is None
         _log_changes(plan, det, today, changes)
@@ -239,6 +330,7 @@ def rebuild_mrr(integration, today: date | None = None) -> dict:
         plan.visits_per_month = det.visits_per_month
         plan.visit_value = det.visit_value
         plan.monthly_value = det.monthly_value
+        plan.pricing_source = det.pricing_source
         plan.start_date = det.start_date
         if plan.status_override == STATUS_CANCELLED:
             plan.end_date = plan.end_date or det.end_date or today

@@ -57,6 +57,8 @@ class Client(SourceRecord):
     average_price_per_visit = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
     monthly_recurring_value = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
     jobber_web_uri = models.CharField(max_length=1000, blank=True, default="")
+    # The company's own account (team leader tasks, inventory…): left out of every Master Dashboard number.
+    is_internal = models.BooleanField(default=False, db_index=True)
 
     class Meta:
         constraints = [SourceRecord.unique_constraint("uniq_client_ext")]

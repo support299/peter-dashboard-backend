@@ -459,3 +459,67 @@ class HubMetricsTests(MasterDashboardDataMixin, TestCase):
         self.assertTrue(all(s["available"] for s in trend["series"]))
         cancellations = self.get("/api/insights/cancellations/?period=month&anchor=2026-07-01")
         self.assertEqual(cancellations["service_reasons"][0]["label"], "Found Cheaper Service")
+
+
+class PricingAndInternalTests(MasterDashboardDataMixin, TestCase):
+    """Client feedback (Oct 23): fixed monthly accounts, $0 visit prices, internal Clean on the Go jobs."""
+
+    def setUp(self):
+        for target in ("django.utils.timezone.localdate", "insights.periods.today"):
+            patcher = mock.patch(target, return_value=TODAY)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def recurring(self, ext, client, price, step=14):
+        job = Job.objects.create(
+            integration=self.integration, external_id=ext, client=client, title=f"{client.name} job",
+            job_type="RECURRING", is_recurring=True, job_status="active",
+        )
+        self._visits(job, date(2026, 6, 1), step, date(2026, 12, 31), Decimal(price))
+        return job
+
+    def test_fixed_monthly_account_uses_monthly_invoice(self):
+        globe = Client.objects.create(integration=self.integration, external_id="g", name="Globe Electric", is_company=True)
+        # Like Globe Electric: $4,880 on every visit (3.5 visits a week), invoiced once a month.
+        job = self.recurring("jg", globe, "4880", step=2)
+        for n, month in enumerate([7, 8, 9, 10]):
+            self._invoice(f"ig{n}", globe, job, date(2026, month, 1), [("Office Cleaning", "4880")])
+        rebuild_insights(self.integration)
+        plan = RecurringPlan.objects.get(job=job)
+        self.assertEqual((plan.monthly_value, plan.pricing_source), (Decimal("4880.00"), "invoice"))
+        # History is priced the same way, not $4,880 × 15 visits.
+        self.assertEqual(MrrSnapshot.objects.get(plan=plan, month=date(2026, 9, 1)).monthly_value, Decimal("4880.00"))
+
+    def test_zero_price_falls_back_to_invoices_or_is_flagged(self):
+        carol = Client.objects.create(integration=self.integration, external_id="z1", name="Carol")
+        dave = Client.objects.create(integration=self.integration, external_id="z2", name="Dave")
+        priced_by_invoice = self.recurring("jz1", carol, "0")
+        for n, month in enumerate([8, 9, 10]):
+            self._invoice(f"iz{n}", carol, priced_by_invoice, date(2026, month, 3), [("Monthly Cleaning Service", "500")])
+        no_price = self.recurring("jz2", dave, "0")
+        rebuild_insights(self.integration)
+        carol_plan = RecurringPlan.objects.get(job=priced_by_invoice)
+        self.assertEqual((carol_plan.monthly_value, carol_plan.pricing_source), (Decimal("500.00"), "invoice"))
+        self.assertEqual(RecurringPlan.objects.get(job=no_price).pricing_source, "none")
+        # Per-visit residential pricing is unchanged.
+        self.assertEqual(RecurringPlan.objects.get(job=self.alice_job).pricing_source, "visit")
+
+        user = get_user_model().objects.create_user("boss", "boss@example.com", "pw", is_staff=True)
+        self.client.force_login(user)
+        rows = self.client.get("/api/insights/mrr/plans/?status=no_price").json()["results"]
+        self.assertEqual([r["client"] for r in rows], ["Dave"])
+
+    def test_internal_clean_on_the_go_is_excluded(self):
+        internal = Client.objects.create(integration=self.integration, external_id="cotg", name="CLEAN ON THE GO INC.")
+        job = self.recurring("jcotg", internal, "0", step=2)  # team leader tasks
+        rebuild_insights(self.integration)
+        internal.refresh_from_db()
+        self.assertTrue(internal.is_internal)
+        self.assertFalse(RecurringPlan.objects.filter(job=job).exists())
+
+        september = periods.build("month", date(2026, 9, 1))
+        metrics = Metrics(self.integration)
+        expected = Visit.objects.filter(is_complete=True, start_at__gte=september.start_dt, start_at__lt=september.end_dt)
+        self.assertTrue(expected.filter(client=internal).exists())
+        self.assertEqual(metrics.value("visits_completed", september), expected.exclude(client=internal).count())
+        self.assertNotIn(internal.id, metrics.active_client_ids(date(2026, 9, 30)))
