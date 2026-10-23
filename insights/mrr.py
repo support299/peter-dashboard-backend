@@ -178,7 +178,10 @@ def detect(job: Job, rows: list[VisitRow], today: date, invoices: list | None = 
     start = rows[0].day if rows else (timezone.localtime(job.start_at).date() if job.start_at else None)
     last_past = past[-1].day if past else None
 
-    if upcoming:
+    if not rows:
+        # No visit ever scheduled: no service, so it never counts (end = start keeps it out of every month).
+        status, end = STATUS_CANCELLED, start
+    elif upcoming:
         status, end = STATUS_ACTIVE, None
     elif job.job_status != "archived" and last_past and (today - last_past).days <= ACTIVE_GRACE_DAYS:
         status, end = STATUS_ACTIVE, None

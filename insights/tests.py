@@ -484,11 +484,38 @@ class PricingAndInternalTests(MasterDashboardDataMixin, TestCase):
         job = self.recurring("jg", globe, "4880", step=2)
         for n, month in enumerate([7, 8, 9, 10]):
             self._invoice(f"ig{n}", globe, job, date(2026, month, 1), [("Office Cleaning", "4880")])
+        september = periods.build("month", date(2026, 9, 1))
+        before = Metrics(self.integration).value("completed_visit_value", september)
         rebuild_insights(self.integration)
         plan = RecurringPlan.objects.get(job=job)
         self.assertEqual((plan.monthly_value, plan.pricing_source), (Decimal("4880.00"), "invoice"))
         # History is priced the same way, not $4,880 × 15 visits.
         self.assertEqual(MrrSnapshot.objects.get(plan=plan, month=date(2026, 9, 1)).monthly_value, Decimal("4880.00"))
+        # Completed visit value: Globe's September visits add up to about one month ($4,880), not $4,880 each.
+        after = Metrics(self.integration).value("completed_visit_value", september)
+        other_visits = Visit.objects.filter(
+            is_complete=True, start_at__gte=september.start_dt, start_at__lt=september.end_dt
+        ).exclude(job=job)
+        globe_share = after - sum((v.price_per_visit or Decimal(0) for v in other_visits), Decimal(0))
+        self.assertLess(abs(globe_share - Decimal(4880)), Decimal(500))
+        self.assertGreater(before - after, Decimal(50000))  # was ~15 visits × $4,880
+
+    def test_recurring_job_without_visits_never_counts(self):
+        ghost = Client.objects.create(integration=self.integration, external_id="gh", name="Ghost")
+        job = Job.objects.create(
+            integration=self.integration, external_id="jgh", client=ghost, title="No visits", job_type="RECURRING",
+            is_recurring=True, job_status="archived", total=Decimal(300),
+            start_at=at(date(2024, 1, 1)), end_at=at(date(2030, 1, 1)),
+        )
+        rebuild_insights(self.integration)
+        plan = RecurringPlan.objects.get(job=job)
+        self.assertEqual(plan.detected_status, "cancelled")
+        self.assertFalse(MrrSnapshot.objects.filter(plan=plan).exists())
+
+    def test_churn_is_reported_as_a_positive_loss(self):
+        rebuild_insights(self.integration)
+        july = periods.build("month", date(2026, 7, 1))
+        self.assertEqual(Metrics(self.integration).value("mrr_churned", july), Decimal("200.00"))
 
     def test_zero_price_falls_back_to_invoices_or_is_flagged(self):
         carol = Client.objects.create(integration=self.integration, external_id="z1", name="Carol")

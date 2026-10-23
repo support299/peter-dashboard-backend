@@ -9,8 +9,8 @@ from django.db.models import Max, Min, Q, Sum
 from django.utils import timezone
 
 from analytics.hub_models import HubComplaint, HubServiceCancellation
-from insights.metrics import Metrics
-from insights.models import PAUSED_STATUSES, STATUS_ACTIVE, STATUS_CANCELLED, RecurringPlan
+from insights.metrics import Metrics, allocated_visit_value
+from insights.models import PAUSED_STATUSES, PRICING_INVOICE, STATUS_ACTIVE, STATUS_CANCELLED, RecurringPlan
 from insights.periods import Period, aware
 from operations.models import (
     CANCELLATION_JOB,
@@ -145,6 +145,14 @@ def _top_clients(metrics: Metrics, period: Period, **_):
 
 
 # ——— visits ———
+def _visit_value(visit):
+    """Line-item price, or the visit's share of the monthly price for accounts priced from invoices."""
+    plan = getattr(visit.job, "recurring_plan", None) if visit.job_id else None
+    if plan and plan.pricing_source == PRICING_INVOICE:
+        return allocated_visit_value(plan.effective_monthly_value, plan.visits_per_month)
+    return visit.price_per_visit
+
+
 def _visit_rows(qs):
     return [
         {
@@ -155,9 +163,9 @@ def _visit_rows(qs):
             "title": v.title,
             "division": DIVISIONS.get(v.division, v.division or "—"),
             "team_leader": v.team_leader.full_name if v.team_leader else "",
-            "amount": v.price_per_visit,
+            "amount": _visit_value(v),
         }
-        for v in qs.select_related("client", "team_leader").order_by("-start_at")[:LIMIT]
+        for v in qs.select_related("client", "team_leader", "job__recurring_plan").order_by("-start_at")[:LIMIT]
     ]
 
 

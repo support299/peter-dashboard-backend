@@ -16,7 +16,7 @@ from django.db.models import Avg, Count, Min, Q, Sum
 from django.utils import timezone
 
 from analytics.hub_models import HubComplaint, HubLeaveRequest, HubReview, HubServiceCancellation, HubWorkHours
-from insights.models import RecurringPlan, STATUS_CANCELLED
+from insights.models import PRICING_INVOICE, RecurringPlan, STATUS_CANCELLED
 from insights.mrr import movements
 from insights.periods import Period, aware
 from operations.models import (
@@ -167,6 +167,12 @@ CHANGE_WATCH = [
     "labour_hours",
     "revenue_per_labour_hour",
 ]
+
+
+def allocated_visit_value(monthly, visits_per_month) -> Decimal:
+    """One visit's share of a monthly price."""
+    per_month = Decimal(visits_per_month or 0)
+    return (Decimal(monthly or 0) / per_month).quantize(Decimal("0.01")) if per_month else Decimal(0)
 
 
 def _day(value: date) -> str:
@@ -557,7 +563,19 @@ class Metrics(HubMetrics):
     def _completed_visit_value(self, period):
         if not self._has("visits", period):
             return None
-        return _d(self._visits(period).filter(is_complete=True).aggregate(s=Sum("price_per_visit"))["s"])
+        completed = self._visits(period).filter(is_complete=True)
+        total = _d(completed.exclude(job__recurring_plan__pricing_source=PRICING_INVOICE).aggregate(s=Sum("price_per_visit"))["s"])
+        # Accounts priced from invoices (e.g. Globe Electric: $4,880 on every visit, invoiced monthly):
+        # each visit is worth its share of the monthly price, not the full line item.
+        shares = (
+            completed.filter(job__recurring_plan__pricing_source=PRICING_INVOICE)
+            .values("job_id")
+            .annotate(n=Count("id"))
+            .values_list("n", "job__recurring_plan__monthly_value", "job__recurring_plan__manual_monthly_value", "job__recurring_plan__visits_per_month")
+        )
+        for n, monthly, manual, per_month in shares:
+            total += allocated_visit_value(manual if manual is not None else monthly, per_month) * n
+        return total.quantize(Decimal("0.01"))
 
     def _avg_revenue_per_visit(self, period):
         revenue, visits = self.value("revenue", period), self.value("visits_completed", period)
@@ -676,7 +694,9 @@ class Metrics(HubMetrics):
             return None
         if kind in ("expansion", "contraction") and period.end < result.expansion_tracked_from:
             return None
-        return result.totals[kind]
+        value = result.totals[kind]
+        # Churn and contraction are reported as amounts lost (positive); the waterfall keeps the sign.
+        return abs(value) if kind in ("churned", "contraction") else value
 
     def _mrr_new(self, period):
         return self._movement(period, "new")
