@@ -521,3 +521,71 @@ def movements(integration, start: date, end: date, division: str = "") -> Moveme
             )
         prev = month
     return result
+
+
+def event_movements(integration, start: date, end: date, division: str = "") -> Movements:
+    """
+    New, reactivated and lost MRR for a day or a week (MRR snapshots are monthly).
+
+    A recurring job that starts in the period is new MRR when the client never had one
+    before, reactivated when their earlier ones had all ended. A recurring job cancelled
+    in the period is lost MRR when the client has no other one still running. A client
+    adding or dropping a second job is expansion or contraction, which only months show.
+    Current MRR and the recurring client lists stay those of the month.
+    """
+    base = movements(integration, start, end, division)
+    if not base.available:
+        return base
+    result = Movements(
+        available=True,
+        starting=base.starting,
+        ending=base.ending,
+        paused_ending=base.paused_ending,
+        recurring_start=base.recurring_start,
+        recurring_end=base.recurring_end,
+        paused_end=base.paused_end,
+        expansion_tracked_from=base.expansion_tracked_from,
+    )
+    plans = RecurringPlan.objects.filter(integration=integration).exclude(client__is_internal=True)
+    by_client = defaultdict(list)
+    for plan in plans.select_related("client").iterator(chunk_size=2000):
+        by_client[_client_key(plan.id, plan.client_id)].append(plan)
+
+    def add(kind, plan, day, change):
+        result.totals[kind] += change
+        result.rows.append(
+            {
+                "type": kind,
+                "month": day.isoformat(),
+                "client_id": plan.client_id,
+                "client": plan.name or "—",
+                "division": plan.division or "",
+                "service": plan.frequency or "",
+                "before": _q(0 if change > 0 else -change),
+                "after": _q(change if change > 0 else 0),
+                "change": _q(change),
+            }
+        )
+
+    for items in by_client.values():
+        for plan in items:
+            if division and plan.division != division:
+                continue
+            value = plan.effective_monthly_value
+            if plan.start_date and start <= plan.start_date <= end and value:
+                earlier = [p for p in items if p is not plan and p.start_date and p.start_date < plan.start_date]
+                if not earlier:
+                    add("new", plan, plan.start_date, value)
+                elif all(p.end_date and p.end_date < start for p in earlier):
+                    # Ended before this period. One that ended inside it was replaced: a change in price
+                    # or frequency, which only months show.
+                    add("reactivated", plan, plan.start_date, value)
+            status = plan.status_override or plan.detected_status
+            if status == STATUS_CANCELLED and plan.end_date and start <= plan.end_date <= end and value:
+                still_running = any(
+                    p is not plan and p.start_date and p.start_date <= end and not (p.end_date and p.end_date <= end) for p in items
+                )
+                if not still_running:
+                    add("churned", plan, plan.end_date, -value)
+    result.rows.sort(key=lambda row: (row["month"], row["client"]))
+    return result

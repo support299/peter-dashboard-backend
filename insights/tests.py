@@ -252,7 +252,7 @@ class ApiTests(MasterDashboardDataMixin, TestCase):
     def test_every_section_and_drill_down_responds(self):
         query = "period=month&anchor=2026-09-01"
         overview = self.get(f"/api/insights/overview/?{query}")
-        self.assertEqual(len(overview["scorecard"]), 7)  # 12 minus the 5 financial ones (no Financials access)
+        self.assertEqual(len(overview["scorecard"]), 14)  # 19 minus the 5 financial ones (no Financials access)
         for section in ("clients", "mrr", "cancellations", "quality"):
             self.get(f"/api/insights/{section}/?{query}")
         self.get("/api/insights/meta/")

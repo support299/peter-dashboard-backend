@@ -22,8 +22,8 @@ from financials.metrics import FinanceMetrics
 from insights.sales import SalesMetrics
 from insights.explanations import HOW
 from insights.models import PRICING_INVOICE, RecurringPlan, STATUS_CANCELLED
-from insights.mrr import movements, tracking_month
-from insights.periods import Period, add_months, aware
+from insights.mrr import event_movements, movements, tracking_month
+from insights.periods import SHORT_KINDS, Period, add_months, aware
 from operations.models import (
     CANCELLATION_JOB,
     CANCELLATION_REASON_GROUPS,
@@ -32,6 +32,7 @@ from operations.models import (
     Client,
     Invoice,
     InvoiceLineItem,
+    Job,
     PaymentRecord,
     Visit,
 )
@@ -45,6 +46,9 @@ DRIVE_RATE_FALLBACK = Decimal(18)  # Peter, Oct 2026: when a person has no drive
 # staff and contractors are paid for it as work time, or not at all.
 DRIVING_POSITIONS = {"cleaning technician", "cleaning specialist", "specialty cleaner"}
 HOURS_DIVISION_NOTE = "Hours are not split by division, so this is shown for all divisions only."
+# On a day or week, MRR moves only through recurring jobs starting or being cancelled (see mrr.event_movements).
+MONTH_ONLY_MRR = {"mrr_starting", "mrr_net_new", "mrr_expansion", "mrr_contraction", "mrr_paused_net", "mrr_untracked", "recurring_retention"}
+MONTH_ONLY_NOTE = "Worked out by month only. Pick Month, Quarter or Year to see it."
 LATE_DIVISION_NOTE = "Late arrivals aren't split by division, so this is shown for all divisions only."
 LEADS_DIVISION_NOTE = "Leads aren't split by division (a calculator quote has no division yet), so this is shown for all divisions only."
 
@@ -96,6 +100,10 @@ KPIS = {
     "paused_clients": kpi("Paused clients", kind="count", better="down", drill="paused_clients", point_in_time=True),
     "recurring_retention": kpi("Recurring client retention %", kind="percent", drill="lost_recurring_clients"),
     "new_recurring_jobs": kpi("New recurring jobs", kind="count", drill="new_recurring_jobs"),
+    "new_recurring_clients": kpi("New recurring clients", kind="count", drill="mrr_new"),
+    "new_one_off_jobs": kpi("New one-off jobs", kind="count", drill="new_one_off_jobs"),
+    "new_one_off_revenue": kpi("New one-off jobs revenue", drill="new_one_off_jobs"),
+    "avg_one_off_price": kpi("Average price per one-off job", drill="new_one_off_jobs"),
     "cancelled_recurring_jobs": kpi("Cancelled recurring jobs", kind="count", better="down", drill="cancelled_recurring_jobs"),
     "net_recurring_jobs": kpi("Net new recurring jobs", kind="count"),
     # MRR
@@ -105,7 +113,7 @@ KPIS = {
     "mrr_expansion": kpi("Expansion MRR", drill="mrr_expansion"),
     "mrr_reactivated": kpi("Reactivated MRR", drill="mrr_reactivated"),
     "mrr_contraction": kpi("Contraction MRR", better="down", drill="mrr_contraction"),
-    "mrr_churned": kpi("Churned MRR", better="down", drill="mrr_churned"),
+    "mrr_churned": kpi("Lost MRR", better="down", drill="mrr_churned"),
     "mrr_paused_net": kpi("Paused / resumed MRR", drill="mrr_paused"),
     "mrr_untracked": kpi("Other changes (before tracking)", drill="mrr_untracked"),
     "mrr_net_new": kpi("Net new MRR"),
@@ -182,6 +190,14 @@ SCORECARD = [
     "avg_revenue_per_visit",
     "payroll_pct",
     "recurring_retention",
+    # Added for Peter, Nov 2026
+    "mrr_new",
+    "mrr_churned",
+    "new_recurring_clients",
+    "new_one_off_jobs",
+    "new_one_off_revenue",
+    "avg_one_off_price",
+    "cancelled_jobs",
 ]
 
 # KPIs scanned by the "What changed?" panel.
@@ -526,7 +542,7 @@ class Metrics(FinanceMetrics, SalesMetrics, HubMetrics):
 
     # ——— public ———
     def value(self, key: str, period: Period):
-        cache_key = (key, period.start, period.end)
+        cache_key = (key, period.kind, period.start, period.end)
         if cache_key not in self._cache:
             method = getattr(self, f"_{key}", None)
             self._cache[cache_key] = method(period) if method else None
@@ -550,6 +566,8 @@ class Metrics(FinanceMetrics, SalesMetrics, HubMetrics):
         start = self.data_starts().get(meta["source"]) if meta["source"] else None
         if current is None and meta["source"] == "expenses":
             payload["note"] = self.finance_note(key, period)
+        elif current is None and key in MONTH_ONLY_MRR and period.kind in SHORT_KINDS:
+            payload["note"] = MONTH_ONLY_NOTE
         elif current is None and not meta["note"]:
             payload["note"] = self._unavailable_note(key)
         elif current is not None and start and period.start < start and not meta["point_in_time"]:
@@ -829,10 +847,14 @@ class Metrics(FinanceMetrics, SalesMetrics, HubMetrics):
 
     # ——— recurring / MRR ———
     def mrr(self, period: Period):
-        key = ("mrr_movements", period.start, period.end)
+        key = ("mrr_movements", period.kind in SHORT_KINDS, period.start, period.end)
         if key not in self._cache:
-            self._cache[key] = movements(self.integration, period.start, period.end, self.division)
+            build = event_movements if period.kind in SHORT_KINDS else movements
+            self._cache[key] = build(self.integration, period.start, period.end, self.division)
         return self._cache[key]
+
+    def _month_only(self, key, period):
+        return key in MONTH_ONLY_MRR and period.kind in SHORT_KINDS
 
     def _mrr_value(self, period, attr):
         result = self.mrr(period)
@@ -844,15 +866,17 @@ class Metrics(FinanceMetrics, SalesMetrics, HubMetrics):
         return self._mrr_value(period, "ending")
 
     def _mrr_starting(self, period):
-        return self._mrr_value(period, "starting")
+        return None if self._month_only("mrr_starting", period) else self._mrr_value(period, "starting")
 
     def _mrr_net_new(self, period):
-        return self._mrr_value(period, "net_new")
+        return None if self._month_only("mrr_net_new", period) else self._mrr_value(period, "net_new")
 
     def _mrr_paused(self, period):
         return self._mrr_value(period, "paused_ending")
 
     def _movement(self, period, kind):
+        if self._month_only(f"mrr_{kind}", period):
+            return None
         result = self.mrr(period)
         if not result.available:
             return None
@@ -881,6 +905,8 @@ class Metrics(FinanceMetrics, SalesMetrics, HubMetrics):
         return self._movement(period, "untracked")
 
     def _mrr_paused_net(self, period):
+        if self._month_only("mrr_paused_net", period):
+            return None
         result = self.mrr(period)
         if not result.available:
             return None
@@ -894,7 +920,16 @@ class Metrics(FinanceMetrics, SalesMetrics, HubMetrics):
         result = self.mrr(period)
         return len(result.paused_end) if result.available else None
 
+    def _new_recurring_clients(self, period):
+        """Clients whose first recurring job started (the clients behind New MRR)."""
+        result = self.mrr(period)
+        if not result.available:
+            return None
+        return len({row["client_id"] or row["client"] for row in result.rows if row["type"] == "new"})
+
     def _recurring_retention(self, period):
+        if self._month_only("recurring_retention", period):
+            return None
         result = self.mrr(period)
         if not result.available or not result.recurring_start:
             return None
@@ -911,6 +946,52 @@ class Metrics(FinanceMetrics, SalesMetrics, HubMetrics):
         if not self._has("visits", period):
             return None
         return self.plans().filter(start_date__gte=period.start, start_date__lte=period.end).count()
+
+    # ——— one-off jobs (booked in the period) ———
+    def new_one_off_jobs(self, period: Period):
+        qs = Job.objects.filter(
+            integration=self.integration, is_one_off=True, source_created_at__gte=period.start_dt, source_created_at__lt=period.end_dt
+        ).exclude(client__is_internal=True)
+        return qs.filter(division=self.division) if self.division else qs
+
+    def one_off_values(self, period: Period) -> dict:
+        """{job id: value before tax}: what was invoiced (after discounts), else the job's price in Jobber."""
+        key = ("one_off_values", period.start, period.end)
+        if key in self._cache:
+            return self._cache[key]
+        jobs = dict(self.new_one_off_jobs(period).values_list("id", "total"))
+        through = Invoice.jobs.through.objects
+        links = list(through.filter(job_id__in=jobs).exclude(invoice__invoice_status="draft").values_list("job_id", "invoice_id"))
+        invoice_ids = {invoice_id for _, invoice_id in links}
+        shared = dict(through.filter(invoice_id__in=invoice_ids).values("invoice_id").annotate(n=Count("job_id")).values_list("invoice_id", "n"))
+        net = dict(Invoice.objects.filter(id__in=invoice_ids).values_list("id", "net_revenue"))
+        invoiced = defaultdict(lambda: Decimal(0))
+        for job_id, invoice_id in links:
+            # An invoice covering several jobs is shared equally between them.
+            invoiced[job_id] += Decimal(net.get(invoice_id) or 0) / (shared.get(invoice_id) or 1)
+        values = {job_id: (invoiced[job_id] if job_id in invoiced else Decimal(total or 0)).quantize(Decimal("0.01")) for job_id, total in jobs.items()}
+        self._cache[key] = values
+        self._cache[("one_off_invoiced", period.start, period.end)] = set(invoiced)
+        return values
+
+    def one_off_invoiced(self, period: Period) -> set:
+        """Ids of the period's one-off jobs priced from their invoices."""
+        self.one_off_values(period)
+        return self._cache[("one_off_invoiced", period.start, period.end)]
+
+    def _new_one_off_jobs(self, period):
+        return self.new_one_off_jobs(period).count() if self._has("visits", period) else None
+
+    def _new_one_off_revenue(self, period):
+        if not self._has("visits", period):
+            return None
+        return sum(self.one_off_values(period).values(), Decimal(0))
+
+    def _avg_one_off_price(self, period):
+        if not self._has("visits", period):
+            return None
+        priced = [value for value in self.one_off_values(period).values() if value > 0]
+        return (sum(priced, Decimal(0)) / len(priced)).quantize(Decimal("0.01")) if priced else None
 
     def _cancelled_recurring_jobs(self, period):
         if not self._has("visits", period):

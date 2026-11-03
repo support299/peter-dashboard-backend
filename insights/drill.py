@@ -12,7 +12,7 @@ from analytics.hub_models import HubComplaint, HubServiceCancellation
 from financials.metrics import DRILL_PARTS, expense_drill
 from insights.metrics import Metrics, allocated_visit_value
 from insights.models import PAUSED_STATUSES, PRICING_INVOICE, STATUS_ACTIVE, STATUS_CANCELLED, RecurringPlan
-from insights.periods import Period, aware
+from insights.periods import SHORT_KINDS, Period, aware
 from operations.models import (
     CANCELLATION_JOB,
     CANCELLATION_REASON_CHOICES,
@@ -309,6 +309,35 @@ def _cancelled_recurring_jobs(metrics, period, **_):
     return _result("Cancelled recurring jobs", PLAN_COLUMNS, [plan_row(p) for p in qs.order_by("end_date")], editable="plans")
 
 
+ONE_OFF_COLUMNS = [
+    col("booked", "Booked", "date"),
+    col("client", "Client"),
+    col("job", "Job"),
+    col("division", "Division"),
+    col("status", "Status"),
+    col("value", "Value before tax", "currency"),
+    col("priced_from", "Price from"),
+]
+
+
+def _new_one_off_jobs(metrics, period, **_):
+    values = metrics.one_off_values(period)
+    invoiced = metrics.one_off_invoiced(period)
+    rows = [
+        {
+            "booked": timezone.localtime(job.source_created_at).date() if job.source_created_at else None,
+            "client": _client_name(job.client),
+            "job": job.title,
+            "division": DIVISIONS.get(job.division, job.division or "—"),
+            "status": (job.job_status or "").replace("_", " ").capitalize(),
+            "value": values.get(job.id, Decimal(0)),
+            "priced_from": "Invoice" if job.id in invoiced else "Job price (not invoiced yet)",
+        }
+        for job in metrics.new_one_off_jobs(period).select_related("client").order_by("source_created_at")
+    ]
+    return _result("New one-off jobs", ONE_OFF_COLUMNS, rows, total=sum((row["value"] for row in rows), Decimal(0)))
+
+
 MOVEMENT_COLUMNS = [
     col("client", "Client"),
     col("month", "Month", "month"),
@@ -329,7 +358,9 @@ def _movement(title, kinds):
         for row in rows:
             row["division"] = DIVISIONS.get(row["division"], row["division"] or "—")
         total = sum((row["change"] for row in rows), Decimal(0))
-        return _result(title, MOVEMENT_COLUMNS, rows, total=total)
+        # A day or week lists each start or cancellation on its date, not by month.
+        columns = [col("month", "Date", "date") if c["key"] == "month" else c for c in MOVEMENT_COLUMNS] if period.kind in SHORT_KINDS else MOVEMENT_COLUMNS
+        return _result(title, columns, rows, total=total)
 
     return handler
 
@@ -604,6 +635,7 @@ HANDLERS = {
     "mrr_plans": _plans("Active recurring plans", [STATUS_ACTIVE]),
     "paused_clients": _plans("Paused recurring plans", list(PAUSED_STATUSES)),
     "new_recurring_jobs": _new_recurring_jobs,
+    "new_one_off_jobs": _new_one_off_jobs,
     "cancelled_recurring_jobs": _cancelled_recurring_jobs,
     "lost_recurring_clients": _lost_recurring_clients,
     "mrr_new": _movement("New MRR", {"new"}),

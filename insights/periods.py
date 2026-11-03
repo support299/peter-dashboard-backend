@@ -1,4 +1,7 @@
-"""Reporting periods: month / quarter / year / custom, with comparison periods.
+"""Reporting periods: day / week / month / quarter / year / custom, with comparison periods.
+
+Weeks run Sunday to Saturday, like the contractor pay weeks. A day or week is
+compared with the one before and with the same weekday(s) 52 weeks earlier.
 
 All dates are local (settings.TIME_ZONE). A period that is still in progress is
 cut at today, and its comparison periods are cut at the same offset, so
@@ -13,7 +16,10 @@ from datetime import date, datetime, time, timedelta
 
 from django.utils import timezone
 
-KINDS = ("month", "quarter", "year", "custom")
+KINDS = ("day", "week", "month", "quarter", "year", "custom")
+SHORT_KINDS = ("day", "week")  # counted in days, not months
+DAYS = {"day": 1, "week": 7}
+SAME_WEEKDAY_LAST_YEAR = 364  # 52 weeks: Tuesday is compared with a Tuesday
 PRESETS = {"last_3y": ("Last 3 years", 36), "last_5y": ("Last 5 years", 60), "lifetime": ("Lifetime", None)}
 
 
@@ -79,6 +85,11 @@ class Period:
     def label(self) -> str:
         if self.preset:
             return f"{PRESETS[self.preset][0]} ({_range_label(self.start, self.end)})"
+        if self.kind == "day":
+            return f"{self.start:%a}, {self.start:%b} {self.start.day}, {self.start.year}"
+        if self.kind == "week":
+            text = f"Week of {self.start:%b} {self.start.day}, {self.start.year}"
+            return f"{text} ({_range_label(self.start, self.end)})" if self.partial else f"{text} ({_range_label(self.start, self.full_end)})"
         if self.kind == "month":
             text = self.start.strftime("%B %Y")
         elif self.kind == "quarter":
@@ -107,6 +118,9 @@ class Period:
         if self.kind == "custom":
             start = self.start + timedelta(days=days)
             return Period("custom", start, start + timedelta(days=self.days - 1), start + timedelta(days=self.days - 1))
+        if self.kind in SHORT_KINDS:
+            start, full_end = self.start + timedelta(days=days), self.full_end + timedelta(days=days)
+            return Period(self.kind, start, start + timedelta(days=self.days - 1), full_end)
         start = add_months(self.start, months)
         full_end = month_end(add_months(self.full_end.replace(day=1), months))
         end = start + timedelta(days=self.days - 1) if self.partial else full_end
@@ -115,6 +129,8 @@ class Period:
     def previous(self) -> "Period":
         if self.kind == "custom":
             return self.shifted(days=-self.days)
+        if self.kind in SHORT_KINDS:
+            return self.shifted(days=-DAYS[self.kind])
         return self.shifted(months=-{"month": 1, "quarter": 3, "year": 12}[self.kind])
 
     def last_year(self) -> "Period":
@@ -122,12 +138,16 @@ class Period:
             start = add_months(self.start, -12)
             end = add_months(self.end, -12)
             return Period("custom", start, end, end)
+        if self.kind in SHORT_KINDS:
+            return self.shifted(days=-SAME_WEEKDAY_LAST_YEAR)
         return self.shifted(months=-12)
 
     def step(self, direction: int) -> "Period":
         """Next/previous full period for the < Previous | Next > arrows."""
         if self.kind == "custom":
             return Period("custom", self.start + timedelta(days=self.days * direction), self.end + timedelta(days=self.days * direction), self.end + timedelta(days=self.days * direction))
+        if self.kind in SHORT_KINDS:
+            return build(self.kind, self.start + timedelta(days=DAYS[self.kind] * direction))
         months = {"month": 1, "quarter": 3, "year": 12}[self.kind] * direction
         return build(self.kind, add_months(self.start, months))
 
@@ -140,8 +160,18 @@ def _range_label(start: date, end: date) -> str:
     return f"{start.strftime('%b')} {start.day}, {start.year} – {end.strftime('%b')} {end.day}, {end.year}"
 
 
+def week_start(value: date) -> date:
+    """The Sunday on or before `value`."""
+    return value - timedelta(days=(value.weekday() + 1) % 7)
+
+
 def build(kind: str, anchor: date, *, end: date | None = None) -> Period:
-    if kind == "quarter":
+    if kind == "day":
+        start = full_end = anchor
+    elif kind == "week":
+        start = week_start(anchor)
+        full_end = start + timedelta(days=6)
+    elif kind == "quarter":
         start = date(anchor.year, (anchor.month - 1) // 3 * 3 + 1, 1)
         full_end = month_end(add_months(start, 2))
     elif kind == "year":
@@ -191,7 +221,7 @@ def preset(key: str) -> Period:
 
 
 def from_request(request) -> Period:
-    """?period=month|quarter|year|custom|last_3y|last_5y|lifetime&anchor=YYYY-MM-DD (or from/to for custom). Default: current month."""
+    """?period=day|week|month|quarter|year|custom|last_3y|last_5y|lifetime&anchor=YYYY-MM-DD (or from/to for custom). Default: current month."""
     kind = request.GET.get("period") or "month"
     if kind in PRESETS:
         return preset(kind)

@@ -18,7 +18,7 @@ from insights import periods
 from insights.models import AlertRule
 
 # Totals that grow through the period (scaled for a period in progress).
-NOT_ADDITIVE = {"avg_revenue_per_visit", "avg_new_client_value", "revenue_per_labour_hour", "cost_per_lead", "cost_per_new_client"}
+NOT_ADDITIVE = {"avg_revenue_per_visit", "avg_new_client_value", "avg_one_off_price", "revenue_per_labour_hour", "cost_per_lead", "cost_per_new_client"}
 ADDITIVE_DECIMAL = {"labour_hours", "overtime_hours", "drive_time_hours", "touch_up_hours"}
 DAYS_PER_MONTH = Decimal("365.25") / 12
 
