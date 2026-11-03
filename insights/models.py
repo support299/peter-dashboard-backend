@@ -148,3 +148,42 @@ class MrrChange(models.Model):
 
     class Meta:
         ordering = ["-changed_on", "-id"]
+
+
+class AlertRule(models.Model):
+    """A limit on a Master Dashboard number: flag it when it crosses the limit."""
+
+    ABOVE = "above"
+    BELOW = "below"
+    UP_PCT = "up_pct"
+    DOWN_PCT = "down_pct"
+    ABOVE_METRIC = "above_metric"
+    BELOW_METRIC = "below_metric"
+    VS_METRIC = (ABOVE_METRIC, BELOW_METRIC)
+    CONDITION_CHOICES = [
+        (ABOVE, "Goes above"),
+        (BELOW, "Goes below"),
+        (UP_PCT, "Rises by more than (%)"),
+        (DOWN_PCT, "Falls by more than (%)"),
+        (ABOVE_METRIC, "Is higher than another number"),
+        (BELOW_METRIC, "Is lower than another number"),
+    ]
+    COMPARE_CHOICES = [("previous", "Previous period"), ("last_year", "Same period last year")]
+
+    metric = models.CharField(max_length=64)
+    condition = models.CharField(max_length=16, choices=CONDITION_CHOICES)
+    threshold = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    # The other number, for "is higher / lower than another number" (e.g. Churned MRR vs New MRR).
+    compare_metric = models.CharField(max_length=64, blank=True, default="")
+    compare_to = models.CharField(max_length=16, choices=COMPARE_CHOICES, default="previous")
+    note = models.CharField(max_length=255, blank=True, default="")
+    is_active = models.BooleanField(default=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["metric", "id"]
+
+    def __str__(self):
+        return f"{self.metric} {self.condition} {self.threshold}"

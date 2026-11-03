@@ -15,7 +15,11 @@ from decimal import Decimal
 from django.db.models import Avg, Count, Min, Q, Sum
 from django.utils import timezone
 
-from analytics.hub_models import HubComplaint, HubLeaveRequest, HubReview, HubServiceCancellation, HubWorkHours
+from analytics.hub_models import HubComplaint, HubEmployee, HubLateArrival, HubLeaveRequest, HubReview, HubServiceCancellation, HubWorkHours
+from analytics.parsing import parse_decimal
+from financials import ledger
+from financials.metrics import FinanceMetrics
+from insights.sales import SalesMetrics
 from insights.explanations import HOW
 from insights.models import PRICING_INVOICE, RecurringPlan, STATUS_CANCELLED
 from insights.mrr import movements, tracking_month
@@ -28,17 +32,21 @@ from operations.models import (
     Client,
     Invoice,
     InvoiceLineItem,
+    PaymentRecord,
     Visit,
 )
 
 ACTIVE_LOOKBACK_DAYS = 90  # completed visit within the last 90 days …
 ACTIVE_LOOKAHEAD_DAYS = 60  # … or a booking coming up
 
-FINANCIALS_NOTE = "Needs the Financials section (expenses and payroll), coming in the next stage."
-LATE_ARRIVALS_NOTE = "The Hub only sends a running total of late arrivals, not dated records, so it can't be split by period yet."
+TOUCH_UP_HOURLY_COST = Decimal(30)  # Peter, Oct 2026
+DRIVE_RATE_FALLBACK = Decimal(18)  # Peter, Oct 2026: when a person has no drive-time rate in the Hub
+# General time is drive time for cleaners only (same list as the Hub): team leaders, managers, office
+# staff and contractors are paid for it as work time, or not at all.
+DRIVING_POSITIONS = {"cleaning technician", "cleaning specialist", "specialty cleaner"}
 HOURS_DIVISION_NOTE = "Hours are not split by division, so this is shown for all divisions only."
-PAYMENTS_NOTE = "Needs Jobber payment dates in the sync, coming in a later stage."
-LEADS_NOTE = "Needs Jobber requests and UMB leads in the sync, coming in a later stage."
+LATE_DIVISION_NOTE = "Late arrivals aren't split by division, so this is shown for all divisions only."
+LEADS_DIVISION_NOTE = "Leads aren't split by division (a calculator quote has no division yet), so this is shown for all divisions only."
 
 
 def kpi(label, kind="currency", better="up", drill=None, note=None, point_in_time=False, source=None):
@@ -51,15 +59,26 @@ KPIS = {
     "invoiced_revenue": kpi("Invoiced revenue", drill="revenue"),
     "discounts": kpi("Discounts", better="down", drill="revenue"),
     "completed_visit_value": kpi("Completed visit value", drill="visits_completed"),
-    "payments_received": kpi("Payments received", note=PAYMENTS_NOTE),
-    "gross_profit": kpi("Gross profit", note=FINANCIALS_NOTE),
-    "gross_margin": kpi("Gross margin %", kind="percent", note=FINANCIALS_NOTE),
-    "net_profit": kpi("Net profit", note=FINANCIALS_NOTE),
-    "net_margin": kpi("Net profit margin %", kind="percent", note=FINANCIALS_NOTE),
-    "cogs": kpi("COGS", better="down", note=FINANCIALS_NOTE),
-    "payroll": kpi("Payroll", better="down", note=FINANCIALS_NOTE),
-    "payroll_pct": kpi("Payroll % of revenue", kind="percent", better="down", note=FINANCIALS_NOTE),
-    "operating_expenses": kpi("Operating expenses", better="down", note=FINANCIALS_NOTE),
+    "payments_received": kpi("Payments received", drill="payments", source="payments"),
+    "days_to_payment": kpi("Avg days to get paid", kind="decimal", better="down", drill="payments", source="payments"),
+    "gross_profit": kpi("Gross profit", drill="expenses_cogs", source="expenses"),
+    "gross_margin": kpi("Gross margin %", kind="percent", drill="expenses_cogs", source="expenses"),
+    "operating_profit": kpi("Operating profit", drill="expenses", source="expenses"),
+    "operating_margin": kpi("Operating margin %", kind="percent", drill="expenses", source="expenses"),
+    "net_profit": kpi("Net profit", drill="expenses", source="expenses"),
+    "net_margin": kpi("Net profit margin %", kind="percent", drill="expenses", source="expenses"),
+    "total_expenses": kpi("Total expenses", better="down", drill="expenses", source="expenses"),
+    "cogs": kpi("COGS", better="down", drill="expenses_cogs", source="expenses"),
+    "operating_expenses": kpi("Operating expenses", better="down", drill="expenses_opex", source="expenses"),
+    "vehicle_expenses": kpi("Vehicle expenses", better="down", drill="expenses_vehicles", source="expenses"),
+    "financial_costs": kpi("Interest & financing costs", better="down", drill="expenses_financial", source="expenses"),
+    "payroll": kpi("Payroll", better="down", drill="expenses_payroll", source="expenses"),
+    "payroll_pct": kpi("Payroll % of revenue", kind="percent", better="down", drill="expenses_payroll", source="expenses"),
+    "labour_cost": kpi("Labour cost", better="down", drill="expenses_labour", source="expenses"),
+    "labour_cost_pct": kpi("Labour cost % of revenue", kind="percent", better="down", drill="expenses_labour", source="expenses"),
+    "cogs_pct": kpi("COGS % of revenue", kind="percent", better="down", drill="expenses_cogs", source="expenses"),
+    "opex_pct": kpi("Operating expenses % of revenue", kind="percent", better="down", drill="expenses_opex", source="expenses"),
+    "expenses_pct": kpi("Expenses % of revenue", kind="percent", better="down", drill="expenses", source="expenses"),
     # Visits
     "visits_completed": kpi("Completed visits", kind="count", drill="visits_completed"),
     "avg_revenue_per_visit": kpi("Avg revenue per visit"),
@@ -67,7 +86,9 @@ KPIS = {
     "active_clients": kpi("Active clients", kind="count", drill="active_clients", point_in_time=True),
     "active_clients_start": kpi("Starting active clients", kind="count", drill="active_clients_start", point_in_time=True),
     "new_clients": kpi("New clients", kind="count", drill="new_clients"),
+    "avg_new_client_value": kpi("Average new client value", drill="new_clients"),
     "returning_clients": kpi("Returning clients", kind="count", drill="returning_clients"),
+    "gained_clients": kpi("Clients gained", kind="count", drill="gained_clients"),
     "lost_clients": kpi("Lost clients", kind="count", better="down", drill="lost_clients"),
     "net_client_growth": kpi("Net client growth", kind="count", drill=None),
     # Recurring
@@ -98,6 +119,8 @@ KPIS = {
     # Quality
     "touch_ups": kpi("Touch-up / redo visits", kind="count", better="down", drill="touch_ups"),
     "touch_up_rate": kpi("Redo rate per 100 visits", kind="rate", better="down", drill="touch_ups"),
+    "touch_up_hours": kpi("Touch-up labour hours", kind="decimal", better="down", drill="touch_ups"),
+    "touch_up_cost": kpi("Cost of touch-ups", better="down", drill="touch_ups"),
     "feedback_score": kpi("Hub feedback score (out of 5)", kind="decimal", drill="feedback", source="feedback"),
     "feedback_responses": kpi("Hub feedback responses", kind="count", drill="feedback", source="feedback"),
     "feedback_participation": kpi("Feedback participation %", kind="percent", drill="feedback", source="feedback"),
@@ -113,9 +136,10 @@ KPIS = {
     "labour_hours": kpi("Labour hours", kind="decimal", better="down", drill="labour_hours", source="hours"),
     "overtime_hours": kpi("Overtime hours", kind="decimal", better="down", drill="labour_hours", source="hours"),
     "drive_time_hours": kpi("Drive time hours", kind="decimal", better="down", drill="labour_hours", source="hours"),
+    "drive_time_cost": kpi("Drive time cost", better="down", drill="labour_hours", source="hours"),
     "revenue_per_labour_hour": kpi("Revenue per labour hour", source="hours"),
     "absence_days": kpi("Absence days", kind="count", better="down", drill="absences"),
-    "late_arrivals": kpi("Late arrivals", kind="count", better="down", note=LATE_ARRIVALS_NOTE),
+    "late_arrivals": kpi("Late arrivals", kind="count", better="down", drill="late_arrivals", source="late_arrivals"),
     "service_cancellation_forms": kpi("Service cancellation forms", kind="count", better="down", drill="service_cancellations", source="service_cancellations"),
     # Concentration & receivables
     "top5_share": kpi("Top 5 clients % of revenue", kind="percent", better="down", drill="top_clients"),
@@ -123,8 +147,23 @@ KPIS = {
     "ar_balance": kpi("Accounts receivable", better="down", drill="receivables", point_in_time=True),
     "ar_overdue": kpi("Overdue receivables", better="down", drill="receivables_overdue", point_in_time=True),
     # Sales (later stage)
-    "leads": kpi("Leads", kind="count", note=LEADS_NOTE),
-    "lead_conversion": kpi("Lead → client conversion %", kind="percent", note=LEADS_NOTE),
+    "leads": kpi("Leads", kind="count", drill="leads", source="leads"),
+    "new_prospects": kpi("New prospects", kind="count", drill="leads_prospects", source="leads"),
+    "leads_quoted": kpi("Quoted", kind="count", drill="leads_quoted", source="leads"),
+    "leads_accepted": kpi("Accepted", kind="count", drill="leads_accepted", source="leads"),
+    "leads_first_clean": kpi("Became clients (first cleaning)", kind="count", drill="leads_won", source="leads"),
+    "leads_recurring": kpi("Became recurring", kind="count", drill="leads_recurring", source="leads"),
+    "lead_conversion": kpi("Lead → client conversion %", kind="percent", drill="leads_won", source="leads"),
+    "days_to_first_clean": kpi("Avg days from lead to first cleaning", kind="decimal", better="down", drill="leads_won", source="leads"),
+    "marketing_spend": kpi("Marketing spend", better="down", drill="expenses_marketing", source="expenses"),
+    "calculator_estimates": kpi("Calculator estimates", kind="count", source="leads"),
+    "jobber_quotes": kpi("Jobber quotes sent", kind="count", source="leads"),
+    "cost_per_lead": kpi("Cost per lead", better="down", source="expenses"),
+    "cost_per_new_client": kpi("Cost per new client", better="down", source="expenses"),
+    # Cash flow (estimate)
+    "cash_in": kpi("Money in (payments received)", drill="payments", source="expenses"),
+    "cash_out": kpi("Money out (paid expenses)", better="down", source="expenses"),
+    "net_cash_flow": kpi("Net cash flow", source="expenses"),
 }
 
 for _key, _meta in KPIS.items():
@@ -173,6 +212,23 @@ CHANGE_WATCH = [
 ]
 
 
+def _local_date(dt):
+    return timezone.localtime(dt).date() if dt else None
+
+
+def jobber_sync_note(entity: str) -> str | None:
+    """Why requests / quotes / payments aren't synced from Jobber (None when they are)."""
+    from insights.models import InsightsSetting
+
+    root = {"payments": "paymentRecords"}.get(entity, entity)
+    status = (InsightsSetting.get("jobber_sales_sync", {}) or {}).get(root)
+    if status and status.get("ok"):
+        return None
+    if status:
+        return f"Jobber {entity} aren't synced: {status.get('error')}"
+    return f"Jobber {entity} haven't been synced yet (they arrive with the next nightly sync)."
+
+
 def allocated_visit_value(monthly, visits_per_month) -> Decimal:
     """One visit's share of a monthly price."""
     per_month = Decimal(visits_per_month or 0)
@@ -185,6 +241,16 @@ def _day(value: date) -> str:
 
 def _d(value) -> Decimal:
     return Decimal(value or 0)
+
+
+def touch_up_labour_hours(visits) -> Decimal:
+    """Scheduled hours × people assigned (at least one person did the visit)."""
+    minutes = 0
+    for duration, start, end, crew in visits.annotate(crew=Count("assignments")).values_list("duration_minutes", "start_at", "end_at", "crew"):
+        if not duration and start and end:
+            duration = max(int((end - start).total_seconds() // 60), 0)
+        minutes += (duration or 0) * max(crew, 1)
+    return (Decimal(minutes) / 60).quantize(Decimal("0.01"))
 
 
 def _pct(part, whole):
@@ -323,6 +389,21 @@ class HubMetrics:
     def _drive_time_hours(self, period):
         return self._hours_sum(period, "drive_time_hours")
 
+    def _drive_time_cost(self, period):
+        """Drive hours × the person's drive-time rate ($18 without one), for cleaners. Contractors get no
+        drive pay, a team leader's General time is paid work, and office staff don't drive between jobs."""
+        if not self._has("hours", period):
+            return None
+        staff = {e.external_id: e for e in HubEmployee.objects.only("external_id", "role", "position", "rates")}
+        total = Decimal(0)
+        for employee_id, hours in self.hours(period).filter(drive_time_hours__gt=0).values_list("employee_external_id", "drive_time_hours"):
+            person = staff.get(employee_id)
+            if not person or person.role.lower() != "employee" or person.position.strip().lower() not in DRIVING_POSITIONS:
+                continue
+            rate = parse_decimal((person.rates or {}).get("drive_time"))
+            total += hours * (rate or DRIVE_RATE_FALLBACK)
+        return total.quantize(Decimal("0.01"))
+
     def _revenue_per_labour_hour(self, period):
         start = self.data_starts().get("hours")
         # Only when hours cover the whole period and the whole company; otherwise the ratio would mislead.
@@ -332,6 +413,15 @@ class HubMetrics:
         if revenue is None or not hours:
             return None
         return (revenue / hours).quantize(Decimal("0.01"))
+
+    # ——— late arrivals (Hub New Absence form, type Late) ———
+    def late_arrivals(self, period: Period):
+        return HubLateArrival.objects.filter(date__gte=period.start, date__lte=period.end)
+
+    def _late_arrivals(self, period):
+        if self.division or not self._has("late_arrivals", period):
+            return None
+        return self.late_arrivals(period).count()
 
     # ——— absences (Hub leave requests) ———
     def absences(self, period: Period):
@@ -350,7 +440,7 @@ class HubMetrics:
     # ——— people ———
     def employee_table(self, period: Period) -> list:
         """Per employee: hours, overtime, Hub reviews they were on, complaints they were responsible for."""
-        people = defaultdict(lambda: {"hours": Decimal(0), "overtime": Decimal(0), "reviews": 0, "rating_sum": 0, "rated": 0, "complaints": 0})
+        people = defaultdict(lambda: {"hours": Decimal(0), "overtime": Decimal(0), "reviews": 0, "rating_sum": 0, "rated": 0, "complaints": 0, "late": 0})
 
         def key(person):
             return person.get("jobber_user_id") or person.get("id") or person.get("name")
@@ -374,6 +464,10 @@ class HubMetrics:
                 k = key(person)
                 names.setdefault(k, person.get("name") or "—")
                 people[k]["complaints"] += 1
+        for row in self.late_arrivals(period).values("jobber_user_id", "employee_external_id", "employee_name"):
+            k = row["jobber_user_id"] or row["employee_external_id"] or row["employee_name"]
+            names.setdefault(k, row["employee_name"] or "—")
+            people[k]["late"] += 1
         rows = []
         for k, row in people.items():
             rows.append(
@@ -384,12 +478,13 @@ class HubMetrics:
                     "reviews": row["reviews"],
                     "avg_rating": (Decimal(row["rating_sum"]) / row["rated"]).quantize(Decimal("0.01")) if row["rated"] else None,
                     "complaints": row["complaints"],
+                    "late": row["late"],
                 }
             )
         return sorted(rows, key=lambda r: (-r["hours"], r["employee"]))
 
 
-class Metrics(HubMetrics):
+class Metrics(FinanceMetrics, SalesMetrics, HubMetrics):
     """Computes KPIs for any period, with per-request caching."""
 
     def __init__(self, integration, division: str = ""):
@@ -418,6 +513,10 @@ class Metrics(HubMetrics):
                 "complaints": HubComplaint.objects.aggregate(m=Min("event_date"))["m"],
                 "hours": HubWorkHours.objects.aggregate(m=Min("date"))["m"],
                 "service_cancellations": HubServiceCancellation.objects.aggregate(m=Min("submitted_date"))["m"],
+                "late_arrivals": HubLateArrival.objects.aggregate(m=Min("date"))["m"],
+                "expenses": ledger.data_start(),
+                "payments": _local_date(PaymentRecord.objects.filter(integration=self.integration).aggregate(m=Min("entry_date"))["m"]),
+                "leads": self.leads_start(),
             }
         return self._starts
 
@@ -449,13 +548,25 @@ class Metrics(HubMetrics):
             for name, other in comparisons.items():
                 payload[name] = self.value(key, other)
         start = self.data_starts().get(meta["source"]) if meta["source"] else None
-        if current is None and not meta["note"]:
+        if current is None and meta["source"] == "expenses":
+            payload["note"] = self.finance_note(key, period)
+        elif current is None and not meta["note"]:
             payload["note"] = self._unavailable_note(key)
         elif current is not None and start and period.start < start and not meta["point_in_time"]:
             # Data began part-way through the period: say so rather than imply a full period.
             payload["note"] = f"Only includes data from {_day(start)}."
+        elif current is not None and key in ledger.PROFIT_KPIS:
+            payload["note"] = self.unreviewed_note(period)
+        elif current is not None and meta["source"] == "leads" and key != "calculator_estimates" and jobber_sync_note("requests"):
+            payload["note"] = "Pricing Calculator quotes only: " + jobber_sync_note("requests")
         if meta["source"] == "hours" and self.division and key != "revenue_per_labour_hour":
             payload["note"] = HOURS_DIVISION_NOTE
+        if current is not None:
+            from insights.alerts import triggered
+
+            hits = triggered(self, period, comparisons).get(key)
+            if hits:
+                payload["alerts"] = hits
         return payload
 
     def _unavailable_note(self, key):
@@ -466,6 +577,14 @@ class Metrics(HubMetrics):
             start = self.data_starts().get("cancellations")
             return f"Cancellation records start on {_day(start)}." if start else "No cancellation records yet."
         source = KPIS[key].get("source")
+        if source == "leads" and self.division:
+            return LEADS_DIVISION_NOTE
+        if source == "late_arrivals" and self.division:
+            return LATE_DIVISION_NOTE
+        if key == "jobber_quotes" and not self.division:
+            return jobber_sync_note("quotes") or "No data for this period."
+        if source in ("leads", "payments") and not self.data_starts().get(source):
+            return jobber_sync_note("payments" if source == "payments" else "requests")
         if source:
             start = self.data_starts().get(source)
             if key == "revenue_per_labour_hour" and self.division:
@@ -595,6 +714,15 @@ class Metrics(HubMetrics):
             return None
         return self._visits(period).filter(is_touch_up=True, is_cancelled=False).count()
 
+    def _touch_up_hours(self, period):
+        if not self._has("visits", period):
+            return None
+        return touch_up_labour_hours(self._visits(period).filter(is_touch_up=True, is_complete=True))
+
+    def _touch_up_cost(self, period):
+        hours = self.value("touch_up_hours", period)
+        return None if hours is None else (hours * TOUCH_UP_HOURLY_COST).quantize(Decimal("0.01"))
+
     def _touch_up_rate(self, period):
         touch, visits = self.value("touch_ups", period), self.value("visits_completed", period)
         if touch is None or not visits:
@@ -636,12 +764,18 @@ class Metrics(HubMetrics):
             end_ids = self.active_client_ids(period.end)
             first = self.first_visit_dates()
             gained = end_ids - start_ids
-            new = {cid for cid in gained if first.get(cid) and period.start <= first[cid] <= period.end}
+            # New = first ever cleaning in the period. Not "gained minus …": a new client usually books
+            # before the first visit, and an upcoming booking already makes them active at the start.
+            new = {cid for cid, day in first.items() if period.start <= day <= period.end}
+            if self.division:
+                new &= end_ids | start_ids
             self._cache[key] = {
                 "start": start_ids,
                 "end": end_ids,
+                "gained": gained,
                 "new": new,
-                "returning": gained - new,
+                # Served before, inactive at the start, active again at the end.
+                "returning": {cid for cid in gained if first.get(cid) and first[cid] < period.start},
                 "lost": start_ids - end_ids,
             }
         return self._cache[key]
@@ -658,17 +792,40 @@ class Metrics(HubMetrics):
     def _new_clients(self, period):
         return len(self.client_flows(period)["new"]) if self._clients_ok(period) else None
 
+    def _avg_new_client_value(self, period):
+        if not self._clients_ok(period):
+            return None
+        new = self.client_flows(period)["new"]
+        first = {}
+        rows = Visit.objects.filter(integration=self.integration, client_id__in=new, is_complete=True).order_by("start_at").values_list(
+            "client_id",
+            "price_per_visit",
+            "job__recurring_plan__pricing_source",
+            "job__recurring_plan__monthly_value",
+            "job__recurring_plan__manual_monthly_value",
+            "job__recurring_plan__visits_per_month",
+        )
+        for client_id, price, source, monthly, manual, per_month in rows:
+            if client_id not in first:
+                # A visit on a monthly-invoiced account is worth its share, as in completed visit value.
+                first[client_id] = allocated_visit_value(manual if manual is not None else monthly, per_month) if source == PRICING_INVOICE else price
+        prices = [Decimal(price) for price in first.values() if price]
+        return (sum(prices, Decimal(0)) / len(prices)).quantize(Decimal("0.01")) if prices else None
+
     def _returning_clients(self, period):
         return len(self.client_flows(period)["returning"]) if self._clients_ok(period) else None
 
     def _lost_clients(self, period):
         return len(self.client_flows(period)["lost"]) if self._clients_ok(period) else None
 
+    def _gained_clients(self, period):
+        return len(self.client_flows(period)["gained"]) if self._clients_ok(period) else None
+
     def _net_client_growth(self, period):
         if not self._clients_ok(period):
             return None
         flows = self.client_flows(period)
-        return len(flows["new"]) - len(flows["lost"])
+        return len(flows["end"]) - len(flows["start"])
 
     # ——— recurring / MRR ———
     def mrr(self, period: Period):

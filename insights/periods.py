@@ -8,12 +8,13 @@ cut at today, and its comparison periods are cut at the same offset, so
 from __future__ import annotations
 
 import calendar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta
 
 from django.utils import timezone
 
 KINDS = ("month", "quarter", "year", "custom")
+PRESETS = {"last_3y": ("Last 3 years", 36), "last_5y": ("Last 5 years", 60), "lifetime": ("Lifetime", None)}
 
 
 def today() -> date:
@@ -55,6 +56,7 @@ class Period:
     start: date
     end: date  # inclusive
     full_end: date  # natural end of the period (end may be cut at today)
+    preset: str = ""  # last_3y / last_5y / lifetime: a custom range with a name
 
     @property
     def start_dt(self) -> datetime:
@@ -75,6 +77,8 @@ class Period:
 
     @property
     def label(self) -> str:
+        if self.preset:
+            return f"{PRESETS[self.preset][0]} ({_range_label(self.start, self.end)})"
         if self.kind == "month":
             text = self.start.strftime("%B %Y")
         elif self.kind == "quarter":
@@ -90,6 +94,7 @@ class Period:
     def as_dict(self) -> dict:
         return {
             "kind": self.kind,
+            "preset": self.preset,
             "start": self.start.isoformat(),
             "end": self.end.isoformat(),
             "full_end": self.full_end.isoformat(),
@@ -165,9 +170,31 @@ def _parse_date(value) -> date | None:
         return None
 
 
+def first_data_day() -> date:
+    """The first invoice or visit, where Lifetime starts."""
+    from django.db.models import Min
+
+    from operations.models import Invoice, Visit
+
+    firsts = [
+        Invoice.objects.exclude(invoice_status="draft").aggregate(m=Min("issued_date"))["m"],
+        Visit.objects.aggregate(m=Min("start_at"))["m"],
+    ]
+    firsts = [timezone.localtime(value).date() for value in firsts if value]
+    return min(firsts) if firsts else today()
+
+
+def preset(key: str) -> Period:
+    months = PRESETS[key][1]
+    start = add_months(today(), -months) + timedelta(days=1) if months else first_data_day()
+    return replace(build("custom", start, end=today()), preset=key)
+
+
 def from_request(request) -> Period:
-    """?period=month|quarter|year|custom&anchor=YYYY-MM-DD (or from/to for custom). Default: current month."""
+    """?period=month|quarter|year|custom|last_3y|last_5y|lifetime&anchor=YYYY-MM-DD (or from/to for custom). Default: current month."""
     kind = request.GET.get("period") or "month"
+    if kind in PRESETS:
+        return preset(kind)
     if kind not in KINDS:
         kind = "month"
     if kind == "custom":
@@ -178,4 +205,6 @@ def from_request(request) -> Period:
 
 
 def comparisons(period: Period) -> dict[str, Period]:
+    if period.preset == "lifetime":
+        return {}  # nothing comes before all of the data
     return {"previous": period.previous(), "last_year": period.last_year()}

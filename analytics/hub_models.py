@@ -259,6 +259,8 @@ class HubComplaint(models.Model):
     event_date = models.DateField(null=True, blank=True, db_index=True)
     team = models.JSONField(default=list, blank=True)
     responsible = models.JSONField(default=list, blank=True)
+    # {id, name, jobber_user_id} picked on the complaint form; empty on complaints logged before the field existed.
+    team_leader = models.JSONField(default=dict, blank=True)
     complaint_type = models.CharField(max_length=120, blank=True, default="", db_index=True)
     what_happened = models.TextField(blank=True, default="")
     how_fixed = models.TextField(blank=True, default="")
@@ -293,6 +295,27 @@ class HubServiceCancellation(models.Model):
         ordering = ["-submitted_at", "-id"]
 
 
+class HubLateArrival(models.Model):
+    """One employee's late arrival, from the Hub's New Absence form (type Late)."""
+
+    external_id = models.CharField(max_length=120, unique=True, db_index=True)
+    submission_id = models.CharField(max_length=120, blank=True, default="")
+    date = models.DateField(db_index=True)
+    employee_external_id = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    employee_name = models.CharField(max_length=255, blank=True, default="")
+    jobber_user_id = models.CharField(max_length=160, blank=True, default="", db_index=True)
+    comment = models.TextField(blank=True, default="")
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    source_payload = models.JSONField(default=dict, blank=True)
+    synced_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-date", "employee_name"]
+
+    def __str__(self):
+        return f"{self.employee_name} {self.date}"
+
+
 class HubWorkHours(models.Model):
     """One employee-day of hours (Jobber timesheets pushed into the Hub; overtime computed by the Hub)."""
 
@@ -311,3 +334,47 @@ class HubWorkHours(models.Model):
 
     class Meta:
         ordering = ["-date", "employee_name"]
+
+
+class HubContractorPay(models.Model):
+    """One line of contractor pay worked out by the Hub: pay or a tip for a visit, a late adjustment, or a deduction."""
+
+    TYPE_PAY = "pay"
+    TYPE_TIP = "tip"
+    TYPE_ADJUSTMENT = "adjustment"
+    TYPE_SUPPLIES = "supplies_deduction"
+    TYPE_RESTOCK = "restock_deduction"
+    EXPENSE_TYPES = (TYPE_PAY, TYPE_TIP, TYPE_ADJUSTMENT)
+    DEDUCTION_TYPES = (TYPE_SUPPLIES, TYPE_RESTOCK)
+
+    external_id = models.CharField(max_length=200, unique=True, db_index=True)
+    line_type = models.CharField(max_length=32, blank=True, default="", db_index=True)
+    date = models.DateField(db_index=True)
+    amount_paid = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    calculated_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    status = models.CharField(max_length=16, blank=True, default="active")
+    week_start = models.DateField(null=True, blank=True)
+    week_paid = models.BooleanField(default=False)
+    pay_rule = models.CharField(max_length=16, blank=True, default="")
+    changed_by = models.CharField(max_length=255, blank=True, default="")
+    reason = models.TextField(blank=True, default="")
+    flags = models.JSONField(default=list, blank=True)
+    contractor_external_id = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    contractor_name = models.CharField(max_length=255, blank=True, default="")
+    jobber_user_id = models.CharField(max_length=160, blank=True, default="")
+    jobber_visit_id = models.CharField(max_length=160, blank=True, default="", db_index=True)
+    client_name = models.CharField(max_length=255, blank=True, default="")
+    job_title = models.CharField(max_length=500, blank=True, default="")
+    source_payload = models.JSONField(default=dict, blank=True)
+    synced_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-date", "contractor_name"]
+
+    def __str__(self):
+        return f"{self.contractor_name} {self.date} {self.line_type} {self.amount_paid}"
+
+    @property
+    def amount(self):
+        """What it costs: a void line is 0."""
+        return 0 if self.status == "void" else self.amount_paid

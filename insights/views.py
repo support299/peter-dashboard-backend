@@ -16,6 +16,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_http_methods
 
 from accounts.authz import protect
+from financials.access import can_see_finances
 from insights import periods
 from insights.drill import cancellation_row, drill, plan_row
 from insights.metrics import KPIS, SCORECARD, Metrics, what_changed
@@ -28,6 +29,8 @@ from insights.models import (
     RecurringPlan,
 )
 from insights.mrr import refresh_current_snapshot, tracking_start
+from insights.alerts import evaluate
+from insights.team_leaders import team_leader_table
 from insights.trends import TREND_METRICS, series
 from integrations.models import Integration
 from operations.models import (
@@ -75,7 +78,9 @@ def _context(request):
     if division not in DIVISION_KEYS:
         division = ""
     period = periods.from_request(request)
-    return Metrics(integration, division), period, periods.comparisons(period)
+    metrics = Metrics(integration, division)
+    metrics.finance_visible = can_see_finances(request.user)
+    return metrics, period, periods.comparisons(period)
 
 
 def _period_payload(period, comps):
@@ -87,6 +92,8 @@ def _period_payload(period, comps):
 
 
 def _cards(metrics, keys, period, comps):
+    # Financial numbers are left out entirely for people without Financials access.
+    keys = [key for key in keys if metrics.finance_visible or KPIS[key]["source"] != "expenses"]
     return [metrics.card(key, period, comps) for key in keys]
 
 
@@ -124,7 +131,8 @@ def overview(request):
         {
             **_period_payload(period, comps),
             "scorecard": _cards(metrics, SCORECARD, period, comps),
-            "what_changed": {"against": against, "items": what_changed(metrics, period, comps[against])},
+            "what_changed": {"against": against, "items": what_changed(metrics, period, comps[against]) if against in comps else []},
+            "alerts": [row for row in evaluate(metrics, period, comps) if row["hit"]],
         }
     )
 
@@ -166,12 +174,13 @@ def revenue(request):
             "divisions": _rows(metrics, "division", DIVISION_CHOICES, period, comps),
             "profitability": _cards(
                 metrics,
-                ["revenue", "cogs", "gross_profit", "gross_margin", "payroll", "payroll_pct", "operating_expenses", "net_profit", "net_margin"],
+                ["cogs", "cogs_pct", "gross_profit", "gross_margin", "operating_expenses", "opex_pct", "vehicle_expenses", "operating_profit", "net_profit", "net_margin", "payroll", "payroll_pct"],
                 period,
                 comps,
             ),
             "concentration": _cards(metrics, ["top5_share", "top10_share"], period, comps),
             "receivables": _cards(metrics, ["ar_balance", "ar_overdue"], period, comps),
+            "collections": _cards(metrics, ["payments_received", "days_to_payment"], period, comps),
             "top_clients": metrics.top_clients(period, 10),
         }
     )
@@ -187,7 +196,7 @@ def clients(request):
             **_period_payload(period, comps),
             "growth": _cards(
                 metrics,
-                ["active_clients_start", "new_clients", "returning_clients", "lost_clients", "net_client_growth", "active_clients"],
+                ["active_clients_start", "gained_clients", "lost_clients", "active_clients", "new_clients", "returning_clients", "net_client_growth"],
                 period,
                 comps,
             ),
@@ -204,7 +213,7 @@ def clients(request):
                 period,
                 comps,
             ),
-            "sales": _cards(metrics, ["leads", "lead_conversion"], period, comps),
+            "sales": _cards(metrics, ["leads", "new_prospects", "lead_conversion", "days_to_first_clean", "avg_new_client_value"], period, comps),
         }
     )
 
@@ -264,7 +273,7 @@ def mrr_plans(request):
     integration = _integration()
     if not integration:
         return _no_integration()
-    qs = RecurringPlan.objects.filter(integration=integration).exclude(client__is_internal=True).select_related("job", "client")
+    qs = RecurringPlan.objects.filter(integration=integration).exclude(client__is_internal=True).select_related("job", "client").prefetch_related("old_bookings")
     division = request.GET.get("division") or ""
     if division in DIVISION_KEYS:
         qs = qs.filter(division=division)
@@ -311,7 +320,7 @@ def _date(value):
 @require_http_methods(["PATCH"])
 def mrr_plan_update(request, pk):
     integration = _integration()
-    plan = RecurringPlan.objects.filter(integration=integration, pk=pk).select_related("job", "client").first()
+    plan = RecurringPlan.objects.filter(integration=integration, pk=pk).select_related("job", "client").prefetch_related("old_bookings").first()
     if not plan:
         return error("Plan not found.", status=404)
     body = _body(request)
@@ -436,7 +445,7 @@ def quality(request):
     return respond(
         {
             **_period_payload(period, comps),
-            "redos": _cards(metrics, ["touch_ups", "touch_up_rate"], period, comps),
+            "redos": _cards(metrics, ["touch_ups", "touch_up_rate", "touch_up_hours", "touch_up_cost"], period, comps),
             "feedback": _cards(metrics, ["feedback_score", "feedback_responses", "feedback_participation"], period, comps),
             "complaints": _cards(
                 metrics, ["complaints", "complaint_rate", "complaints_open", "complaint_resolution_days"], period, comps
@@ -444,6 +453,7 @@ def quality(request):
             "google": _cards(metrics, ["google_rating", "google_reviews", "google_new_reviews", "google_five_star_new"], period, comps),
             "complaint_types": metrics.complaint_types(period) if metrics._has("complaints", period) else [],
             "people": metrics.employee_table(period),
+            "team_leaders": team_leader_table(metrics, period),
         }
     )
 
@@ -459,13 +469,36 @@ def operations(request):
             "data_start": metrics.data_starts().get("hours"),
             "work": _cards(
                 metrics,
-                ["visits_completed", "labour_hours", "revenue_per_labour_hour", "overtime_hours", "drive_time_hours"],
+                ["visits_completed", "labour_hours", "revenue_per_labour_hour", "overtime_hours", "drive_time_hours", "drive_time_cost"],
                 period,
                 comps,
             ),
             "people": _cards(metrics, ["absence_days", "late_arrivals", "cancellations_internal"], period, comps),
             "payroll": _cards(metrics, ["payroll", "payroll_pct"], period, comps),
             "employees": metrics.employee_table(period),
+            "team_leaders": team_leader_table(metrics, period),
+        }
+    )
+
+
+@require_GET
+def sales(request):
+    metrics, period, comps = _context(request)
+    if not metrics:
+        return _no_integration()
+    from insights.metrics import jobber_sync_note
+
+    return respond(
+        {
+            **_period_payload(period, comps),
+            "data_start": metrics.data_starts().get("leads"),
+            "division_note": metrics.division and "Leads aren't split by division, so this page shows the whole company.",
+            "funnel": _cards(metrics, ["leads", "new_prospects", "leads_quoted", "leads_accepted", "leads_first_clean", "leads_recurring"], period, comps),
+            "quotes": _cards(metrics, ["calculator_estimates", "jobber_quotes"], period, comps),
+            "rates": _cards(metrics, ["lead_conversion", "days_to_first_clean"], period, comps),
+            "marketing": _cards(metrics, ["marketing_spend", "cost_per_lead", "cost_per_new_client", "new_clients"], period, comps),
+            "sources": metrics.lead_sources(period) if not metrics.division else [],
+            "sync_notes": [note for note in (jobber_sync_note("requests"), jobber_sync_note("quotes")) if note],
         }
     )
 
@@ -477,6 +510,7 @@ def trend(request):
         return _no_integration()
     division = request.GET.get("division") or ""
     metrics = Metrics(integration, division if division in DIVISION_KEYS else "")
+    metrics.finance_visible = can_see_finances(request.user)
     grain = request.GET.get("grain") if request.GET.get("grain") in ("month", "quarter", "year") else None
     range_key = request.GET.get("range") if request.GET.get("range") in ("12m", "3y", "5y", "lifetime", "custom") else "12m"
     keys = [k for k in (request.GET.get("metrics") or request.GET.get("metric") or "revenue").split(",") if k in KPIS][:4]
@@ -514,6 +548,7 @@ urlpatterns = [
     path("cancellations/", protect(cancellations)),
     path("cancellations/<int:pk>/", protect(cancellation_update, staff=True)),
     path("quality/", protect(quality)),
+    path("sales/", protect(sales)),
     path("operations/", protect(operations)),
     path("trend/", protect(trend)),
     path("drill/", protect(drill_view)),

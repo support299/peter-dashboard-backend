@@ -226,6 +226,7 @@ class JobberSyncService:
             self._sync_properties()
             self._sync_jobs()
             self._sync_invoices()
+            self._sync_sales()
             self._sync_visits()
             self._sync_tasks(
                 created_after=(timezone.now() - timedelta(days=45)).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -641,12 +642,6 @@ class JobberSyncService:
                 "division": (job.division if job else "") or classify_division(title, job.title if job else ""),
                 "service_type": (job.service_type if job and job.is_one_off else "")
                 or (classify_service_type(title) if (job and job.is_one_off) or (not job) else ""),
-                "team_leader": (job.team_leader if job else None)
-                or self._lookup(
-                    self._employee_cache,
-                    Employee,
-                    node_id((((node.get("assignedUsers") or {}).get("nodes")) or [{}])[0]),
-                ),
                 "source_created_at": parse_dt(node.get("createdAt")),
                 "source_payload": node,
             },
@@ -716,6 +711,15 @@ class JobberSyncService:
             self._upsert_invoice(node)
             count += 1
         self._record("invoices", count)
+
+    def _sync_sales(self):
+        """Requests, quotes and payments. Never fails the main sync (see integrations.sales_sync)."""
+        from integrations.sales_sync import SalesSync
+
+        try:
+            SalesSync(self).run()
+        except Exception:
+            logger.exception("Sales sync failed; continuing")
 
     def _sync_visits(self):
         count = 0

@@ -9,6 +9,7 @@ from django.db.models import Max, Min, Q, Sum
 from django.utils import timezone
 
 from analytics.hub_models import HubComplaint, HubServiceCancellation
+from financials.metrics import DRILL_PARTS, expense_drill
 from insights.metrics import Metrics, allocated_visit_value
 from insights.models import PAUSED_STATUSES, PRICING_INVOICE, STATUS_ACTIVE, STATUS_CANCELLED, RecurringPlan
 from insights.periods import Period, aware
@@ -248,6 +249,25 @@ def plan_row(plan: RecurringPlan) -> dict:
         "end_date": plan.end_date,
         # Jobs are synced without their Jobber link, so fall back to the client's Jobber page.
         "link": (plan.job.jobber_web_uri if plan.job_id else "") or (plan.client.jobber_web_uri if plan.client_id else ""),
+        "old_tab": _old_tab(plan),
+    }
+
+
+def _old_tab(plan):
+    """What the old MRR tab recorded for this plan (sales person, reason it ended…), if it's linked."""
+    booking = next(iter(plan.old_bookings.all()), None) if plan.pk else None
+    if not booking:
+        return None
+    return {
+        "id": booking.id,
+        "status": booking.status,
+        "monthly_value": booking.monthly_value,
+        "start_date": booking.start_date,
+        "end_date": booking.end_date,
+        "sales_person": booking.sales_person,
+        "method": booking.method,
+        "cancellation_reason": booking.cancellation_reason,
+        "notes": booking.notes or booking.client_comments,
     }
 
 
@@ -271,19 +291,19 @@ def _effective(qs, statuses):
 
 def _plans(title, statuses):
     def handler(metrics, period, **_):
-        qs = _effective(metrics.plans().select_related("job", "client"), statuses).order_by("name")
+        qs = _effective(metrics.plans().select_related("job", "client").prefetch_related("old_bookings"), statuses).order_by("name")
         return _result(title, PLAN_COLUMNS, [plan_row(p) for p in qs], editable="plans")
 
     return handler
 
 
 def _new_recurring_jobs(metrics, period, **_):
-    qs = metrics.plans().select_related("job", "client").filter(start_date__gte=period.start, start_date__lte=period.end).order_by("start_date")
+    qs = metrics.plans().select_related("job", "client").prefetch_related("old_bookings").filter(start_date__gte=period.start, start_date__lte=period.end).order_by("start_date")
     return _result("New recurring jobs", PLAN_COLUMNS, [plan_row(p) for p in qs], editable="plans")
 
 
 def _cancelled_recurring_jobs(metrics, period, **_):
-    qs = _effective(metrics.plans().select_related("job", "client"), [STATUS_CANCELLED]).filter(
+    qs = _effective(metrics.plans().select_related("job", "client").prefetch_related("old_bookings"), [STATUS_CANCELLED]).filter(
         end_date__gte=period.start, end_date__lte=period.end
     )
     return _result("Cancelled recurring jobs", PLAN_COLUMNS, [plan_row(p) for p in qs.order_by("end_date")], editable="plans")
@@ -443,6 +463,7 @@ COMPLAINT_COLUMNS = [
     col("date", "Date", "date"),
     col("client", "Client"),
     col("type", "Type"),
+    col("team_leader", "Team leader"),
     col("responsible", "Responsible"),
     col("team", "Team"),
     col("status", "Status"),
@@ -462,6 +483,7 @@ def _complaint_rows(qs):
                 "date": c.event_date,
                 "client": c.client_name,
                 "type": c.complaint_type,
+                "team_leader": (c.team_leader or {}).get("name") or "Not recorded",
                 "responsible": _names(c.responsible),
                 "team": _names(c.team),
                 "status": (c.status or "").replace("_", " ").capitalize(),
@@ -517,6 +539,14 @@ def _labour_hours(metrics, period, **_):
     )
 
 
+def _late_arrivals(metrics, period, **_):
+    rows = [
+        {"date": row.date, "employee": row.employee_name, "comment": row.comment}
+        for row in metrics.late_arrivals(period).order_by("-date", "employee_name")[:LIMIT]
+    ]
+    return _result("Late arrivals", [col("date", "Date", "date"), col("employee", "Employee"), col("comment", "Comment")], rows, total=None)
+
+
 def _absences(metrics, period, **_):
     rows = [
         {"employee": a.employee_name, "start": a.start_date, "end": a.end_date, "days": a.weekday_count, "status": a.status}
@@ -568,6 +598,7 @@ HANDLERS = {
     "active_clients_start": _client_set("start", "Active clients at start of period"),
     "new_clients": _client_set("new", "New clients"),
     "returning_clients": _client_set("returning", "Returning clients"),
+    "gained_clients": _client_set("gained", "Clients gained"),
     "lost_clients": _client_set("lost", "Lost clients"),
     "recurring_clients": _plans("Active and paused recurring plans", [STATUS_ACTIVE, *PAUSED_STATUSES]),
     "mrr_plans": _plans("Active recurring plans", [STATUS_ACTIVE]),
@@ -592,6 +623,94 @@ HANDLERS = {
     "complaints_open": _complaints_open,
     "complaints_resolved": _complaints_resolved,
     "labour_hours": _labour_hours,
+    "late_arrivals": _late_arrivals,
     "absences": _absences,
     "service_cancellations": _service_cancellations,
+    **{key: (lambda k: lambda m, p, **kw: expense_drill(m, p, k))(key) for key in DRILL_PARTS},
 }
+
+
+# ——— sales funnel & payments ———
+LEAD_STAGE_FILTERS = {
+    "leads": ("Leads", lambda lead: True),
+    "leads_prospects": ("New prospects", lambda lead: not lead.existing_client),
+    "leads_quoted": ("Prospects who got a quote", lambda lead: not lead.existing_client and lead.quoted),
+    "leads_accepted": ("Prospects who accepted", lambda lead: not lead.existing_client and lead.accepted),
+    "leads_won": ("Prospects who became clients", lambda lead: not lead.existing_client and lead.first_clean),
+    "leads_recurring": ("Prospects who became recurring", lambda lead: not lead.existing_client and lead.recurring),
+}
+
+
+def _stage(lead):
+    if lead.existing_client:
+        return "Existing client"
+    if lead.recurring:
+        return "Recurring client"
+    if lead.first_clean:
+        return "First cleaning done"
+    if lead.accepted:
+        return "Accepted"
+    return "Quoted" if lead.quoted else "Lead"
+
+
+def _leads(key):
+    title, keep = LEAD_STAGE_FILTERS[key]
+
+    def handler(metrics, period, **_):
+        rows = [
+            {
+                "date": lead.date,
+                "client": lead.name,
+                "source": "Pricing Calculator" if lead.source == "calculator" else "Jobber request",
+                "channel": lead.channel,
+                "stage": _stage(lead),
+                "first_clean": lead.first_clean,
+                "touches": lead.touches,
+                "link": lead.link,
+            }
+            for lead in sorted(metrics.period_leads(period), key=lambda item: item.date, reverse=True)
+            if keep(lead)
+        ]
+        return _result(
+            title,
+            [
+                col("date", "Lead date", "date"),
+                col("client", "Name"),
+                col("source", "Came from"),
+                col("channel", "Heard about us / source"),
+                col("stage", "Where they are now"),
+                col("first_clean", "First cleaning", "date"),
+                col("touches", "Quotes / requests", "count"),
+            ],
+            rows,
+            total=None,
+        )
+
+    return handler
+
+
+def _payments(metrics, period, **_):
+    qs = metrics.payments(period).select_related("client", "invoice").order_by("-entry_date", "-id")
+    rows = [
+        {
+            "date": _local(p.entry_date),
+            "client": _client_name(p.client),
+            "number": p.invoice.invoice_number if p.invoice else "—",
+            "type": (p.payment_type or p.adjustment_type or "").replace("_", " ").capitalize() or "—",
+            "amount": p.amount,
+            "link": p.invoice.jobber_web_uri if p.invoice else (p.client.jobber_web_uri if p.client else ""),
+        }
+        for p in qs[:LIMIT]
+    ]
+    total = qs.aggregate(s=Sum("amount"))["s"] or Decimal(0)
+    return _result(
+        "Payments received",
+        [col("date", "Paid on", "date"), col("client", "Client"), col("number", "Invoice"), col("type", "Type"), col("amount", "Amount", "currency")],
+        rows,
+        total_rows=qs.count(),
+        total=total,
+    )
+
+
+HANDLERS.update({key: _leads(key) for key in LEAD_STAGE_FILTERS})
+HANDLERS["payments"] = _payments

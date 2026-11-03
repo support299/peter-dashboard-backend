@@ -42,12 +42,16 @@ def _client_ip(request):
 
 
 def _user_payload(user):
+    from financials.access import finance_role
+
     return {
         "id": user.pk,
         "email": user.email or user.username,
         "username": user.username,
         "first_name": user.first_name,
         "last_name": user.last_name,
+        "is_staff": bool(user.is_staff or user.is_superuser),
+        "finance_role": finance_role(user),
     }
 
 

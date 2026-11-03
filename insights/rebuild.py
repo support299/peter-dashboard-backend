@@ -6,6 +6,8 @@ from django.db.models import Q
 
 from insights.models import InsightsSetting
 from insights.mrr import rebuild_mrr
+from insights.mrr_merge import link_bookings
+from insights.team_leaders import assign_team_leaders
 from operations.models import Client, Visit
 from operations.revenue import reclassify_all
 
@@ -37,11 +39,20 @@ def flag_touch_ups(integration) -> int:
 
 
 def rebuild_insights(integration) -> dict:
+    from django.utils import timezone
+
+    started = timezone.now().isoformat()
     stats = {
         "internal_clients_flagged": flag_internal_clients(integration),
         "revenue": reclassify_all(integration),
         "touch_ups_flagged": flag_touch_ups(integration),
     }
     stats["mrr"] = rebuild_mrr(integration)
+    stats["old_mrr_tab"] = link_bookings(integration)
+    stats["team_leaders"] = assign_team_leaders(integration)
+    # Line-item rules are now applied (the Revenue rules page stops asking to recalculate).
+    status = InsightsSetting.get("reclassify_status", {}) or {}
+    if status.get("state") != "running":
+        InsightsSetting.put("reclassify_status", {**status, "state": "done", "started_at": started, "finished_at": timezone.now().isoformat(), "error": ""})
     logger.info("Insights rebuilt: %s", stats)
     return stats

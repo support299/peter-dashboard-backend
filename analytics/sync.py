@@ -11,7 +11,9 @@ from analytics.hub_models import (
     HubAlert,
     HubBonus,
     HubComplaint,
+    HubContractorPay,
     HubEmployee,
+    HubLateArrival,
     HubLeaveRequest,
     HubPendingLockIn,
     HubReview,
@@ -337,6 +339,7 @@ def _upsert_complaints(rows):
                 "event_date": incident or _local_date(submitted),
                 "team": _people(row.get("team")),
                 "responsible": _people(row.get("responsible")),
+                "team_leader": as_dict(row.get("team_leader")),
                 "complaint_type": (row.get("type") or "")[:120],
                 "what_happened": row.get("what_happened") or "",
                 "how_fixed": row.get("how_fixed") or "",
@@ -402,6 +405,70 @@ def _upsert_work_hours(rows):
     return seen
 
 
+def _upsert_late_arrivals(rows):
+    seen = set()
+    for row in rows:
+        external_id = str(row.get("id") or "").strip()
+        day = parse_d(row.get("date"))
+        if not external_id or not day:
+            continue
+        seen.add(external_id)
+        HubLateArrival.objects.update_or_create(
+            external_id=external_id,
+            defaults={
+                "submission_id": str(row.get("submission_id") or ""),
+                "date": day,
+                "employee_external_id": str(row.get("employee_id") or ""),
+                "employee_name": row.get("employee_name") or "",
+                "jobber_user_id": row.get("jobber_user_id") or "",
+                "comment": row.get("comment") or "",
+                "submitted_at": parse_dt(row.get("submitted_at")),
+                "source_payload": row,
+            },
+        )
+    return seen
+
+
+def _flags(value):
+    if isinstance(value, dict):
+        return [key for key, on in value.items() if on]
+    return [str(flag) for flag in as_list(value) if flag]
+
+
+def _upsert_contractor_pay(rows):
+    seen = set()
+    for row in rows:
+        external_id = str(row.get("id") or "").strip()
+        day = parse_d(row.get("date"))
+        if not external_id or not day:
+            continue
+        seen.add(external_id)
+        HubContractorPay.objects.update_or_create(
+            external_id=external_id,
+            defaults={
+                "line_type": str(row.get("type") or "")[:32],
+                "date": day,
+                "amount_paid": parse_decimal(row.get("amount_paid"), ZERO),
+                "calculated_amount": parse_decimal(row.get("calculated_amount")),
+                "status": str(row.get("status") or "active").lower()[:16],
+                "week_start": parse_d(row.get("week_start")),
+                "week_paid": bool(row.get("week_paid")),
+                "pay_rule": str(row.get("pay_rule") or "")[:16],
+                "changed_by": str(row.get("changed_by") or "")[:255],
+                "reason": row.get("reason") or "",
+                "flags": _flags(row.get("flags")),
+                "contractor_external_id": str(row.get("contractor_id") or ""),
+                "contractor_name": row.get("contractor_name") or "",
+                "jobber_user_id": row.get("jobber_user_id") or "",
+                "jobber_visit_id": row.get("jobber_visit_id") or "",
+                "client_name": row.get("client_name") or "",
+                "job_title": (row.get("job_title") or "")[:500],
+                "source_payload": row,
+            },
+        )
+    return seen
+
+
 def _prune_window(model, date_field, keep_ids, rows, row_date, meta):
     """
     Remove records the Hub no longer has, but only inside the date range this
@@ -428,11 +495,13 @@ HUB_FORM_SECTIONS = [
     ("complaints", HubComplaint, "submitted_date", _upsert_complaints, _submitted_day),
     ("service_cancellations", HubServiceCancellation, "submitted_date", _upsert_service_cancellations, _submitted_day),
     ("work_hours", HubWorkHours, "date", _upsert_work_hours, lambda row: parse_d(row.get("date"))),
+    ("late_arrivals", HubLateArrival, "date", _upsert_late_arrivals, lambda row: parse_d(row.get("date"))),
+    ("contractor_pay", HubContractorPay, "date", _upsert_contractor_pay, lambda row: parse_d(row.get("date"))),
 ]
 
 
 def _persist_hub_forms(payload, meta):
-    """Reviews, complaints, service cancellations and work hours (added Oct 2026)."""
+    """Reviews, complaints, service cancellations, work hours, late arrivals and contractor pay."""
     counts, summary = {}, {}
     for key, model, date_field, upsert, row_date in HUB_FORM_SECTIONS:
         section = as_dict(payload.get(key))
@@ -518,6 +587,7 @@ def persist_payload(payload, sync_run: AdminInternalSyncRun):
         sync_run.finished_at = timezone.now()
         sync_run.error = ""
         sync_run.save()
+    _book_contractor_pay()
 
 
 def run_sync(sync_run: AdminInternalSyncRun | None = None) -> AdminInternalSyncRun:
@@ -538,6 +608,18 @@ def run_sync(sync_run: AdminInternalSyncRun | None = None) -> AdminInternalSyncR
         sync_run.error = str(exc)
         sync_run.save(update_fields=["status", "finished_at", "error"])
     return sync_run
+
+
+def _book_contractor_pay():
+    """Contractor pay goes into Financials as daily expenses. A problem there never fails the Hub sync."""
+    from financials.contractor_pay import book_expenses
+
+    try:
+        result = book_expenses()
+        if result:
+            logger.info("Contractor pay booked: %s", result)
+    except Exception:
+        logger.exception("Booking contractor pay as expenses failed")
 
 
 def latest_successful_sync():

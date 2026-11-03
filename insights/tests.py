@@ -242,7 +242,7 @@ class ApiTests(MasterDashboardDataMixin, TestCase):
         self.assertEqual(divisions["residential"], 320.0)
         categories = {row["key"]: row["current"] for row in data["categories"]}
         self.assertEqual(categories["other"], 20.0)
-        self.assertFalse({c["key"]: c for c in data["profitability"]}["gross_profit"]["available"])
+        self.assertEqual(data["profitability"], [])  # no Financials access: profit lines are hidden
 
         october = self.get("/api/insights/revenue/?period=month&anchor=2026-10-01&division=rentals")
         self.assertEqual({c["key"]: c for c in october["cards"]}["revenue"]["current"], 149.0)
@@ -252,7 +252,7 @@ class ApiTests(MasterDashboardDataMixin, TestCase):
     def test_every_section_and_drill_down_responds(self):
         query = "period=month&anchor=2026-09-01"
         overview = self.get(f"/api/insights/overview/?{query}")
-        self.assertEqual(len(overview["scorecard"]), 12)
+        self.assertEqual(len(overview["scorecard"]), 7)  # 12 minus the 5 financial ones (no Financials access)
         for section in ("clients", "mrr", "cancellations", "quality"):
             self.get(f"/api/insights/{section}/?{query}")
         self.get("/api/insights/meta/")
@@ -444,7 +444,7 @@ class HubMetricsTests(MasterDashboardDataMixin, TestCase):
         self.assertEqual(cards["overtime_hours"]["current"], 1.0)
         self.assertEqual(cards["revenue_per_labour_hour"]["current"], 122.0)  # $1,220 / 10 h
         self.assertIsNone(cards["labour_hours"]["previous"])  # no hours in August: unavailable, not zero
-        self.assertFalse({c["key"]: c for c in data["payroll"]}["payroll_pct"]["available"])
+        self.assertEqual(data["payroll"], [])  # payroll is hidden without Financials access
 
     def test_churn_reason_from_hub_form_and_new_drills(self):
         drill = self.get("/api/insights/drill/?period=month&anchor=2026-07-01&metric=mrr_churned")

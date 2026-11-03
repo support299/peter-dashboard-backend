@@ -51,6 +51,7 @@ INSTALLED_APPS = [
     "operations",
     "analytics",
     "insights",
+    "financials",
 ]
 
 MIDDLEWARE = [
@@ -140,6 +141,17 @@ if _frontend_url.startswith("http"):
     CSRF_TRUSTED_ORIGINS.append(_frontend_url.rstrip("/"))
 
 FRONTEND_URL = _frontend_url.rstrip("/")
+
+# Financials receipts (private S3 bucket; boto3 reads AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY from the environment).
+AWS_STORAGE_BUCKET_NAME = os.getenv("AWS_STORAGE_BUCKET_NAME", "")
+AWS_S3_REGION_NAME = os.getenv("AWS_S3_REGION_NAME", "eu-north-1")
+# Receipts are uploaded through the API (photos and PDFs up to 10 MB).
+DATA_UPLOAD_MAX_MEMORY_SIZE = 12 * 1024 * 1024
+FILE_UPLOAD_MAX_MEMORY_SIZE = 12 * 1024 * 1024
+
+# First day contractor pay from the Hub is added to expenses automatically (YYYY-MM-DD; empty = off).
+# From then on Peter stops entering contractor pay by hand.
+CONTRACTOR_PAY_START = os.getenv("CONTRACTOR_PAY_START", "")
 
 ADMIN_INTERNAL_APP = {
     "API_KEY": os.getenv("ADMIN_INTERNAL_APP_API_KEY", ""),

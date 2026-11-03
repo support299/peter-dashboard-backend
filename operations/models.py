@@ -461,3 +461,59 @@ class GoogleReview(models.Model):
 
     class Meta:
         ordering = ["-reviewed_at", "-id"]
+
+
+class JobberRequest(SourceRecord):
+    """A Jobber request (online booking form / work request): one of the two lead sources."""
+
+    client = models.ForeignKey(Client, on_delete=models.SET_NULL, null=True, blank=True, related_name="requests")
+    title = models.CharField(max_length=500, blank=True, default="")
+    request_status = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    source = models.CharField(max_length=120, blank=True, default="")
+    jobber_web_uri = models.CharField(max_length=1000, blank=True, default="")
+
+    class Meta:
+        constraints = [SourceRecord.unique_constraint("uniq_jobber_request_ext")]
+        indexes = [models.Index(fields=["source_created_at"])]
+
+    def __str__(self):
+        return self.title or self.external_id
+
+
+class Quote(SourceRecord):
+    client = models.ForeignKey(Client, on_delete=models.SET_NULL, null=True, blank=True, related_name="quotes")
+    request = models.ForeignKey(JobberRequest, on_delete=models.SET_NULL, null=True, blank=True, related_name="quotes")
+    quote_number = models.CharField(max_length=64, blank=True, default="")
+    quote_status = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    title = models.CharField(max_length=500, blank=True, default="")
+    subtotal = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    total = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    # When the quote last changed status (e.g. approved).
+    transitioned_at = models.DateTimeField(null=True, blank=True)
+    jobber_web_uri = models.CharField(max_length=1000, blank=True, default="")
+
+    class Meta:
+        constraints = [SourceRecord.unique_constraint("uniq_quote_ext")]
+        indexes = [models.Index(fields=["source_created_at"])]
+
+    def __str__(self):
+        return self.quote_number or self.external_id
+
+
+class PaymentRecord(SourceRecord):
+    """Money received from a client (or refunded), by the date it was recorded in Jobber."""
+
+    client = models.ForeignKey(Client, on_delete=models.SET_NULL, null=True, blank=True, related_name="payment_records")
+    invoice = models.ForeignKey(Invoice, on_delete=models.SET_NULL, null=True, blank=True, related_name="payment_records")
+    entry_date = models.DateTimeField(null=True, blank=True, db_index=True)
+    # Positive for payments, negative for refunds.
+    amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    payment_type = models.CharField(max_length=64, blank=True, default="")
+    adjustment_type = models.CharField(max_length=64, blank=True, default="")
+
+    class Meta:
+        constraints = [SourceRecord.unique_constraint("uniq_payment_record_ext")]
+
+    def __str__(self):
+        return f"{self.entry_date:%Y-%m-%d} {self.amount}" if self.entry_date else self.external_id

@@ -11,6 +11,8 @@ app.conf.imports = (
     "integrations.tasks",
     "operations.tasks",
     "analytics.tasks",
+    "financials.tasks",
+    "insights.tasks",
 )
 app.autodiscover_tasks()
 
@@ -29,6 +31,11 @@ app.conf.beat_schedule = {
     "daily-sync-internal": {
         "task": "analytics.tasks.sync_admin_internal",
         "schedule": crontab(hour=22, minute=45),
+        "options": {"expires": 3600},
+    },
+    "daily-recurring-expenses": {
+        "task": "financials.tasks.generate_recurring_expenses",
+        "schedule": crontab(hour=10, minute=0),
         "options": {"expires": 3600},
     },
     "daily-sync-pricing": {

@@ -148,6 +148,14 @@ class MrrBooking(models.Model):
     # When True, lock-in re-import must not overwrite user edits.
     manual_override = models.BooleanField(default=False, db_index=True)
 
+    # Merge with the Master Dashboard: the Jobber recurring plan this booking is.
+    MATCH_AUTO = "auto"
+    MATCH_MANUAL = "manual"
+    MATCH_IGNORED = "ignored"
+    MATCH_CHOICES = [(MATCH_AUTO, "Matched by name"), (MATCH_MANUAL, "Linked by hand"), (MATCH_IGNORED, "Not a Jobber plan")]
+    plan = models.ForeignKey("insights.RecurringPlan", null=True, blank=True, on_delete=models.SET_NULL, related_name="old_bookings")
+    plan_match = models.CharField(max_length=16, choices=MATCH_CHOICES, blank=True, default="")
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     created_by = models.ForeignKey(

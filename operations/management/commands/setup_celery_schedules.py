@@ -32,6 +32,13 @@ class Command(BaseCommand):
                 "hour": "23",
                 "minute": "5",
             },
+            {
+                "name": "Daily recurring expenses",
+                "task": "financials.tasks.generate_recurring_expenses",
+                # 10:00 UTC = early morning in Quebec, so today's charges are ready to verify.
+                "hour": "10",
+                "minute": "0",
+            },
         ]
         for item in schedules:
             crontab, _ = CrontabSchedule.objects.get_or_create(
