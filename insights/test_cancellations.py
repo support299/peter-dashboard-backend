@@ -138,6 +138,15 @@ class CloseDateTests(MasterDashboardDataMixin, TestCase):
         self.assertNotIn("Sandra Weir", july_lost)  # not the last-cleaning month
         self.assertEqual(metrics.value("mrr_churned", september), plan.effective_monthly_value)
 
+        brief = Client.objects.create(integration=self.integration, external_id="cb", name="Started And Stopped")
+        short = self.job(brief, job_status="archived", completed_at=aware(date(2026, 9, 22)))
+        self.visits(short, [date(2026, 9, 2), date(2026, 9, 16)])  # inside one month: no month-end MRR
+        rebuild_mrr(self.integration, today=TODAY)
+        metrics = Metrics(self.integration)
+        self.assertEqual(metrics.value("cancelled_recurring_clients", september), 2)
+        listed = HANDLERS["cancelled_recurring_clients"](metrics, september)["rows"]
+        self.assertEqual([(r["client"], r["closed"]) for r in listed], [("Sandra Weir", date(2026, 9, 14)), ("Started And Stopped", date(2026, 9, 22))])
+
         drill = HANDLERS["lost_recurring_clients"](metrics, september)
         self.assertEqual([r["client"] for r in drill["rows"]], ["Sandra Weir"])
         self.assertEqual(drill["rows"][0]["last_visit"], date(2026, 7, 20))

@@ -550,6 +550,43 @@ def movements(integration, start: date, end: date, division: str = "") -> Moveme
     return result
 
 
+def cancelled_clients(integration, start: date, end: date, division: str = "") -> list[dict]:
+    """
+    Recurring clients whose job was closed (cancelled) in [start, end] with no other recurring job
+    still running: the "Cancelled jobs" card. Counted from the close date itself, so a client who
+    started and stopped inside one month counts too, and so does a job with no price in Jobber
+    (month-end MRR sees neither).
+    """
+    by_client = defaultdict(list)
+    for plan in RecurringPlan.objects.filter(integration=integration).exclude(client__is_internal=True).iterator(chunk_size=2000):
+        by_client[_client_key(plan.id, plan.client_id)].append(plan)
+    rows = {}
+    for key, items in by_client.items():
+        for plan in items:
+            if division and plan.division != division:
+                continue
+            status = plan.status_override or plan.detected_status
+            if status != STATUS_CANCELLED or not plan.end_date or not (start <= plan.end_date <= end):
+                continue
+            if plan.start_date and plan.start_date >= plan.end_date:
+                continue  # never had a visit: nothing was cancelled
+            still_running = any(
+                p is not plan and p.start_date and p.start_date <= end and not (p.end_date and p.end_date <= end) for p in items
+            )
+            if still_running:
+                continue
+            if key not in rows or plan.end_date > rows[key]["closed"]:
+                rows[key] = {
+                    "client_id": plan.client_id,
+                    "client": plan.name or "—",
+                    "division": plan.division or "",
+                    "service": plan.frequency or "",
+                    "closed": plan.end_date,
+                    "monthly_value": _q(plan.effective_monthly_value),
+                }
+    return sorted(rows.values(), key=lambda row: (row["closed"], row["client"]))
+
+
 def event_movements(integration, start: date, end: date, division: str = "") -> Movements:
     """
     New, reactivated and lost MRR for a day or a week (MRR snapshots are monthly).

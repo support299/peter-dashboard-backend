@@ -22,7 +22,7 @@ from financials.metrics import FinanceMetrics
 from insights.sales import SalesMetrics
 from insights.explanations import HOW
 from insights.models import PRICING_INVOICE, RecurringPlan, STATUS_CANCELLED
-from insights.mrr import event_movements, movements, tracking_month
+from insights.mrr import cancelled_clients, event_movements, movements, tracking_month
 from insights.periods import SHORT_KINDS, Period, add_months, aware
 from operations.models import (
     CANCELLATION_JOB,
@@ -101,7 +101,7 @@ KPIS = {
     "recurring_retention": kpi("Recurring client retention %", kind="percent", drill="lost_recurring_clients"),
     "new_recurring_jobs": kpi("New recurring jobs", kind="count", drill="new_recurring_jobs"),
     "new_recurring_clients": kpi("New recurring clients", kind="count", drill="mrr_new"),
-    "cancelled_recurring_clients": kpi("Cancelled jobs", kind="count", better="down", drill="lost_recurring_clients"),
+    "cancelled_recurring_clients": kpi("Cancelled jobs", kind="count", better="down", drill="cancelled_recurring_clients"),
     "new_one_off_jobs": kpi("New one-off jobs", kind="count", drill="new_one_off_jobs"),
     "new_one_off_revenue": kpi("New one-off jobs revenue", drill="new_one_off_jobs"),
     "avg_one_off_price": kpi("Average price per one-off job", drill="new_one_off_jobs"),
@@ -928,12 +928,17 @@ class Metrics(FinanceMetrics, SalesMetrics, HubMetrics):
             return None
         return len({row["client_id"] or row["client"] for row in result.rows if row["type"] == "new"})
 
+    def cancelled_clients(self, period: Period) -> list:
+        key = ("cancelled_clients", period.start, period.end)
+        if key not in self._cache:
+            self._cache[key] = cancelled_clients(self.integration, period.start, period.end, self.division)
+        return self._cache[key]
+
     def _cancelled_recurring_clients(self, period):
-        """Clients whose recurring job was closed in Jobber, with no other recurring job still running (the clients behind Lost MRR)."""
-        result = self.mrr(period)
-        if not result.available:
+        """Clients whose recurring job was closed in Jobber, with no other recurring job still running."""
+        if not self._has("visits", period):
             return None
-        return len({row["client_id"] or row["client"] for row in result.rows if row["type"] == "churned"})
+        return len(self.cancelled_clients(period))
 
     def _recurring_retention(self, period):
         if self._month_only("recurring_retention", period):

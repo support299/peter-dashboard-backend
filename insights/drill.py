@@ -406,6 +406,26 @@ def _attach_reasons(metrics: Metrics, rows, period: Period):
         row["reason"] = reasons.get(row.get("client_id"), "")
 
 
+CANCELLED_COLUMNS = [
+    col("client", "Client"),
+    col("closed", "Closed in Jobber", "date"),
+    col("last_visit", "Last cleaning", "date"),
+    col("service", "Frequency"),
+    col("division", "Division"),
+    col("monthly_value", "Monthly value", "currency"),
+    col("reason", "Cancellation reason"),
+]
+
+
+def _cancelled_recurring_clients(metrics, period, **_):
+    rows = [dict(row, type="churned") for row in metrics.cancelled_clients(period)]
+    _attach_reasons(metrics, rows, period)
+    _attach_last_visits(metrics, rows)
+    for row in rows:
+        row["division"] = DIVISIONS.get(row["division"], row["division"] or "—")
+    return _result("Cancelled jobs (clients lost)", CANCELLED_COLUMNS, rows, total=sum((row["monthly_value"] for row in rows), Decimal(0)))
+
+
 def _attach_last_visits(metrics: Metrics, rows):
     ids = {row["client_id"] for row in rows if row.get("client_id")}
     last = dict(
@@ -661,6 +681,7 @@ HANDLERS = {
     "new_one_off_jobs": _new_one_off_jobs,
     "cancelled_recurring_jobs": _cancelled_recurring_jobs,
     "lost_recurring_clients": _lost_recurring_clients,
+    "cancelled_recurring_clients": _cancelled_recurring_clients,
     "mrr_new": _movement("New MRR", {"new"}),
     "mrr_expansion": _movement("Expansion MRR", {"expansion"}),
     "mrr_reactivated": _movement("Reactivated MRR", {"reactivated"}),
