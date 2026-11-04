@@ -171,6 +171,25 @@ def _schedule_terms(upcoming: list, past: list):
     return price, freq
 
 
+# A job closed long after its last cleaning is a clean-up in Jobber, not a cancellation that month:
+# it ends at the last cleaning instead, so old months don't carry clients who had long stopped.
+CLOSE_GAP_DAYS = 90
+
+
+def closed_on(job: Job) -> date | None:
+    """
+    The day a recurring job was closed in Jobber: its completedAt. Until Jobber sends that field
+    (older syncs only kept a short list of fields), an archived job's last update is used instead.
+    """
+    if job.job_status != "archived":
+        return None
+    if job.completed_at:
+        return timezone.localtime(job.completed_at).date()
+    if "completedAt" not in (job.source_payload or {}) and job.source_updated_at:
+        return timezone.localtime(job.source_updated_at).date()
+    return None
+
+
 def detect(job: Job, rows: list[VisitRow], today: date, invoices: list | None = None) -> Detection:
     rows = sorted(rows, key=lambda r: r.day)
     upcoming = [r for r in rows if r.day >= today and not r.complete]
@@ -178,9 +197,17 @@ def detect(job: Job, rows: list[VisitRow], today: date, invoices: list | None = 
     start = rows[0].day if rows else (timezone.localtime(job.start_at).date() if job.start_at else None)
     last_past = past[-1].day if past else None
 
+    closed = closed_on(job)
     if not rows:
         # No visit ever scheduled: no service, so it never counts (end = start keeps it out of every month).
         status, end = STATUS_CANCELLED, start
+    elif closed:
+        # Closed in Jobber (Nov 2026, with the Hub): cancelled on the close date, the month Peter looks at,
+        # even when visits are still listed or the last cleaning was weeks before.
+        done = [r.day for r in past if r.complete]
+        if done and (closed - done[-1]).days > CLOSE_GAP_DAYS:
+            closed = done[-1]
+        status, end = STATUS_CANCELLED, max(closed, start) if start else closed
     elif upcoming:
         status, end = STATUS_ACTIVE, None
     elif job.job_status != "archived" and last_past and (today - last_past).days <= ACTIVE_GRACE_DAYS:

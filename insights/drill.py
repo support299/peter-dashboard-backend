@@ -20,6 +20,7 @@ from operations.models import (
     CANCELLATION_VISIT,
     DIVISION_CHOICES,
     REVENUE_CATEGORY_CHOICES,
+    CancellationRecord,
     Client,
     Invoice,
     Visit,
@@ -341,6 +342,7 @@ def _new_one_off_jobs(metrics, period, **_):
 MOVEMENT_COLUMNS = [
     col("client", "Client"),
     col("month", "Month", "month"),
+    col("last_visit", "Last cleaning", "date"),
     col("service", "Frequency"),
     col("division", "Division"),
     col("before", "MRR before", "currency"),
@@ -355,6 +357,7 @@ def _movement(title, kinds):
         result = metrics.mrr(period)
         rows = [dict(row) for row in result.rows if row["type"] in kinds] if result.available else []
         _attach_reasons(metrics, rows, period)
+        _attach_last_visits(metrics, rows)
         for row in rows:
             row["division"] = DIVISIONS.get(row["division"], row["division"] or "—")
         total = sum((row["change"] for row in rows), Decimal(0))
@@ -379,12 +382,15 @@ def _attach_reasons(metrics: Metrics, rows, period: Period):
     reasons = {}
     if churned:
         client_ids = [row["client_id"] for row in churned]
-        for client_id, reason, notes in (
-            metrics.cancellations(period, CANCELLATION_JOB)
-            .filter(client_id__in=client_ids)
-            .values_list("client_id", "reason", "notes")
-        ):
-            reasons[client_id] = REASONS.get(reason) or notes or ""
+        # Jobber's "Cancelled job" / "Cancelled visit" tasks are a secondary signal: the team doesn't use
+        # them consistently (a client who stopped may be logged as a cancelled visit), so take either,
+        # within two months of the period.
+        nearby = CancellationRecord.objects.filter(
+            integration=metrics.integration, client_id__in=client_ids,
+            task_date__gte=period.start - timedelta(days=60), task_date__lte=period.end + timedelta(days=31),
+        ).order_by("task_date")
+        for client_id, reason, notes in nearby.values_list("client_id", "reason", "notes"):
+            reasons[client_id] = REASONS.get(reason) or notes or reasons.get(client_id) or "Cancellation task in Jobber"
         clients = {c.id: c for c in Client.objects.filter(id__in=client_ids).only("id", "external_id", "name")}
         by_jobber = {c.external_id: c.id for c in clients.values()}
         by_name = {_norm(c.name): c.id for c in clients.values() if c.name}
@@ -400,11 +406,28 @@ def _attach_reasons(metrics: Metrics, rows, period: Period):
         row["reason"] = reasons.get(row.get("client_id"), "")
 
 
+def _attach_last_visits(metrics: Metrics, rows):
+    ids = {row["client_id"] for row in rows if row.get("client_id")}
+    last = dict(
+        Visit.objects.filter(integration=metrics.integration, client_id__in=ids, is_complete=True)
+        .values("client_id")
+        .annotate(last=Max("start_at"))
+        .values_list("client_id", "last")
+    )
+    for row in rows:
+        when = last.get(row.get("client_id"))
+        row["last_visit"] = timezone.localtime(when).date() if when else None
+
+
 def _lost_recurring_clients(metrics, period, **_):
     result = metrics.mrr(period)
     rows = [dict(row) for row in result.rows if row["type"] == "churned"] if result.available else []
     _attach_reasons(metrics, rows, period)
-    return _result("Recurring clients lost", MOVEMENT_COLUMNS, rows)
+    _attach_last_visits(metrics, rows)
+    for row in rows:
+        row["division"] = DIVISIONS.get(row["division"], row["division"] or "—")
+    columns = [col("month", "Closed", "date") if c["key"] == "month" else c for c in MOVEMENT_COLUMNS] if period.kind in SHORT_KINDS else MOVEMENT_COLUMNS
+    return _result("Recurring clients lost", columns, rows, total=sum((row["change"] for row in rows), Decimal(0)))
 
 
 # ——— cancellations ———

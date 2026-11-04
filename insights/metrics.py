@@ -101,6 +101,7 @@ KPIS = {
     "recurring_retention": kpi("Recurring client retention %", kind="percent", drill="lost_recurring_clients"),
     "new_recurring_jobs": kpi("New recurring jobs", kind="count", drill="new_recurring_jobs"),
     "new_recurring_clients": kpi("New recurring clients", kind="count", drill="mrr_new"),
+    "cancelled_recurring_clients": kpi("Cancelled jobs", kind="count", better="down", drill="lost_recurring_clients"),
     "new_one_off_jobs": kpi("New one-off jobs", kind="count", drill="new_one_off_jobs"),
     "new_one_off_revenue": kpi("New one-off jobs revenue", drill="new_one_off_jobs"),
     "avg_one_off_price": kpi("Average price per one-off job", drill="new_one_off_jobs"),
@@ -197,7 +198,7 @@ SCORECARD = [
     "new_one_off_jobs",
     "new_one_off_revenue",
     "avg_one_off_price",
-    "cancelled_jobs",
+    "cancelled_recurring_clients",
 ]
 
 # KPIs scanned by the "What changed?" panel.
@@ -926,6 +927,13 @@ class Metrics(FinanceMetrics, SalesMetrics, HubMetrics):
         if not result.available:
             return None
         return len({row["client_id"] or row["client"] for row in result.rows if row["type"] == "new"})
+
+    def _cancelled_recurring_clients(self, period):
+        """Clients whose recurring job was closed in Jobber, with no other recurring job still running (the clients behind Lost MRR)."""
+        result = self.mrr(period)
+        if not result.available:
+            return None
+        return len({row["client_id"] or row["client"] for row in result.rows if row["type"] == "churned"})
 
     def _recurring_retention(self, period):
         if self._month_only("recurring_retention", period):

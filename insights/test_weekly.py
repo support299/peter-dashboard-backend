@@ -133,7 +133,7 @@ class WeeklyMetricsTests(MasterDashboardDataMixin, TestCase):
         self.assertEqual({r["priced_from"] for r in drill["rows"]}, {"Invoice", "Job price (not invoiced yet)"})
 
     def test_ceo_view_has_the_new_cards_on_a_week(self):
-        for key in ("mrr_new", "mrr_churned", "new_recurring_clients", "new_one_off_jobs", "new_one_off_revenue", "avg_one_off_price", "cancelled_jobs"):
+        for key in ("mrr_new", "mrr_churned", "new_recurring_clients", "new_one_off_jobs", "new_one_off_revenue", "avg_one_off_price", "cancelled_recurring_clients"):
             self.assertIn(key, SCORECARD)
         self.client.force_login(get_user_model().objects.create_superuser("boss", "b@x.ca", "pw"))
         for kind in ("week", "day"):

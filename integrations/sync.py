@@ -59,6 +59,26 @@ from operations.taxonomy import cancellation_type_from_title
 
 logger = logging.getLogger(__name__)
 
+# A deleted visit is removed only when this pass returned at least this share of the visits we hold,
+# so a short or failed response never wipes the schedule (same rule as payments).
+VISIT_PRUNE_MIN_SHARE = 0.9
+# The fields that worked in the last full sync, per root, so a webhook fetch of one record uses them too.
+WORKING_FIELDS_KEY = "jobber_working_fields"
+
+
+def top_level_fields(selection: str) -> list[str]:
+    """'id client { id } assignedUsers(first: 5) { nodes { id } }' -> ['id', 'client { id }', 'assignedUsers(first: 5) { nodes { id } }']."""
+    tokens = selection.replace("{", " { ").replace("}", " } ").split()
+    fields, current, depth = [], [], 0
+    for index, token in enumerate(tokens):
+        current.append(token)
+        depth += token.count("{") + token.count("(") - token.count("}") - token.count(")")
+        following = tokens[index + 1] if index + 1 < len(tokens) else ""
+        if depth == 0 and not following.startswith(("{", "(")):
+            fields.append(" ".join(current))
+            current = []
+    return fields
+
 DEFAULT_KPIS = [
     {
         "key": "visits_total",
@@ -325,9 +345,42 @@ class JobberSyncService:
         try:
             self.client.execute(probe)
         except JobberAPIError as exc:
-            logger.warning("%s full selection failed (%s); using minimal fields.", name, exc)
-            working = self.MINIMAL_SELECTIONS.get(name, "id createdAt updatedAt")
+            logger.warning("%s full selection failed (%s); keeping every field that works.", name, exc)
+            working = self._working_selection(name, selection, filter_bit)
         yield from self.client.paginate(name, working, page_size=page_size, extra_args=extra_args)
+
+    def _probe(self, name: str, selection: str, filter_bit: str) -> bool:
+        try:
+            self.client.execute(f"query Probe {{ {name}(first: 1{filter_bit}) {{ nodes {{ {selection} }} }} }}")
+            return True
+        except JobberAPIError:
+            return False
+
+    def _working_selection(self, name: str, selection: str, filter_bit: str) -> str:
+        """
+        One field Jobber refuses (renamed, deprecated, or not allowed by the app's permissions) used to
+        drop the query to a short fixed list, which lost e.g. a job's close date (completedAt). Start
+        from that list and add back every other field that works on its own.
+        """
+        base = top_level_fields(self.MINIMAL_SELECTIONS.get(name, "id createdAt updatedAt"))
+        names = {field.split("(")[0].split("{")[0].strip() for field in base}
+        kept, dropped = list(base), []
+        for field in top_level_fields(selection):
+            if field.split("(")[0].split("{")[0].strip() in names:
+                continue
+            if self._probe(name, " ".join([*base, field]), filter_bit):
+                kept.append(field)
+            else:
+                dropped.append(field.split("(")[0].split("{")[0].strip())
+        if dropped:
+            logger.warning("Jobber %s: fields left out because Jobber refused them: %s", name, ", ".join(dropped))
+            self.counts.setdefault("fields_left_out", {})[name] = dropped
+        working = " ".join(kept)
+        from insights.models import InsightsSetting
+
+        stored = InsightsSetting.get(WORKING_FIELDS_KEY, {}) or {}
+        InsightsSetting.put(WORKING_FIELDS_KEY, {**stored, name: working})
+        return working
 
     def _lookup(self, cache: dict, model, external_id: str):
         if not external_id:
@@ -419,7 +472,17 @@ class JobberSyncService:
         root, selection, upsert = spec
         from integrations.queries import node_query
 
-        data = self.client.execute(node_query(root, selection), {"id": item_id})
+        try:
+            data = self.client.execute(node_query(root, selection), {"id": item_id})
+        except JobberAPIError:
+            # Jobber refused a field: use the fields the last full sync found to work. Never fall back to
+            # the short list here, or one update would wipe fields such as a job's close date.
+            from insights.models import InsightsSetting
+
+            working = (InsightsSetting.get(WORKING_FIELDS_KEY, {}) or {}).get(f"{root}s")
+            if not working:
+                raise
+            data = self.client.execute(node_query(root, working), {"id": item_id})
         node = data.get(root)
         if not node:
             logger.warning("Jobber %s %s was empty after webhook fetch", object_name, item_id)
@@ -733,10 +796,30 @@ class JobberSyncService:
                 logger.warning("Root visits query failed (%s); using jobs.visits", exc)
                 yield from self._visits_via_jobs()
 
+        seen = set()
         for node in visit_source():
             if self._upsert_visit(node):
                 count += 1
+                seen.add(node["id"])
         self._record("visits", count)
+        self._record("visits_removed", self._prune_visits(seen))
+
+    def _prune_visits(self, seen: set) -> int:
+        """
+        Remove upcoming visits Jobber no longer has (deleted, or dropped when a job was closed).
+        Left behind, they keep a client 'active' and a recurring job running. Past visits are kept.
+        """
+        held = Visit.objects.filter(integration=self.integration).count()
+        if not held or len(seen) < held * VISIT_PRUNE_MIN_SHARE:
+            return 0
+        cutoff = timezone.now() - timedelta(days=1)
+        upcoming = Visit.objects.filter(integration=self.integration, start_at__gte=cutoff)
+        gone = [external_id for external_id in upcoming.values_list("external_id", flat=True) if external_id not in seen]
+        for start in range(0, len(gone), 1000):  # stay well under the database's parameter limit
+            Visit.objects.filter(integration=self.integration, external_id__in=gone[start : start + 1000]).delete()
+        if gone:
+            logger.info("Removed %s upcoming visits Jobber no longer has", len(gone))
+        return len(gone)
 
     def _visits_via_jobs(self):
         query = f"""
