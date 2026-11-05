@@ -387,12 +387,19 @@ def rebuild_mrr(integration, today: date | None = None) -> dict:
 
     with transaction.atomic():
         MrrChange.objects.bulk_create(changes)
+        # Months recorded as active before we knew the job had closed (e.g. before close dates came from
+        # Jobber) are not: a closed job counts up to the month it closed, never after.
+        stale = 0
+        for plan in plans:
+            if plan.status == STATUS_CANCELLED and plan.end_date:
+                removed, _ = MrrSnapshot.objects.filter(plan=plan, month__gte=month_start(plan.end_date)).exclude(month=current).delete()
+                stale += removed
         snapshots = _build_snapshots(plans, detections, today, current, track_month)
         MrrSnapshot.objects.filter(plan__integration=integration, source=MrrSnapshot.SOURCE_HISTORY).delete()
         MrrSnapshot.objects.filter(plan__integration=integration, month=current).delete()
         MrrSnapshot.objects.bulk_create(snapshots, batch_size=2000)
 
-    return {"plans": len(plans), "changes": len(changes), "snapshots": len(snapshots)}
+    return {"plans": len(plans), "changes": len(changes), "snapshots": len(snapshots), "stale_months_removed": stale}
 
 
 def _build_snapshots(plans, detections, today, current, track_month):

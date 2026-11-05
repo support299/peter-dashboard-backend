@@ -127,7 +127,16 @@ class CloseDateTests(MasterDashboardDataMixin, TestCase):
             integration=self.integration, jobber_task=JobberTask.objects.create(integration=self.integration, external_id="t-sw", title="Cancelled Visit"),
             jobber_task_external_id="t-sw", cancellation_type=CANCELLATION_VISIT, client=gone, task_date=date(2026, 9, 14), reason="client_cancellation",
         )
+        from insights.models import MrrSnapshot
+
+        cnet = Client.objects.create(integration=self.integration, external_id="cn", name="Old record")
+        early = RecurringPlan.objects.create(integration=self.integration, job=self.job(cnet), client=cnet, name="Old record")
+        self.visits(early.job, [date(2026, 6, 2), date(2026, 6, 16)])
+        MrrSnapshot.objects.create(plan=early, month=date(2026, 10, 1), monthly_value=D(0), status=STATUS_ACTIVE, source=MrrSnapshot.SOURCE_TRACKED)
+        early.job.job_status, early.job.completed_at = "archived", aware(date(2026, 7, 1))
+        early.job.save()
         rebuild_mrr(self.integration, today=TODAY)
+        self.assertFalse(MrrSnapshot.objects.filter(plan=early, month=date(2026, 10, 1)).exists())  # recorded before we knew it closed
         plan = RecurringPlan.objects.get(job=sandra)
         self.assertEqual((plan.detected_status, plan.end_date), (STATUS_CANCELLED, date(2026, 9, 14)))
 
