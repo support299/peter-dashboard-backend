@@ -775,7 +775,38 @@ class Metrics(FinanceMetrics, SalesMetrics, HubMetrics):
             )
             if self.division:
                 qs = qs.filter(division=self.division)
-            self._cache[key] = set(qs.values_list("client_id", flat=True).distinct())
+            ids = set(qs.values_list("client_id", flat=True).distinct())
+            # Peter, Nov 2026: a client whose recurring service was cancelled (job closed in Jobber) stops
+            # being active on the close date, not 90 days later, unless they were cleaned again after it
+            # or have a booking coming up.
+            closed = {cid: day_closed for cid, day_closed in self.closed_clients().items() if cid in ids and day_closed <= day}
+            if closed:
+                still = set()
+                for cid, start_at, complete in qs.filter(client_id__in=closed).values_list("client_id", "start_at", "is_complete"):
+                    if start_at >= mid or (complete and timezone.localtime(start_at).date() > closed[cid]):
+                        still.add(cid)
+                ids -= set(closed) - still
+            self._cache[key] = ids
+        return self._cache[key]
+
+    def closed_clients(self) -> dict:
+        """
+        {client id: close date} for clients whose recurring jobs are all closed (archived) in Jobber.
+        A plan marked cancelled only because its visits stopped, or a new job with nothing scheduled
+        yet, doesn't count: those clients keep the 90-day rule.
+        """
+        key = ("closed_clients",)
+        if key not in self._cache:
+            plans = defaultdict(list)
+            for client_id, job_status, status, override, end in RecurringPlan.objects.filter(
+                integration=self.integration, client__isnull=False
+            ).values_list("client_id", "job__job_status", "detected_status", "status_override", "end_date"):
+                plans[client_id].append((job_status == "archived" and (override or status) == STATUS_CANCELLED, end))
+            self._cache[key] = {
+                client_id: max(end for _, end in rows)
+                for client_id, rows in plans.items()
+                if all(closed and end for closed, end in rows)
+            }
         return self._cache[key]
 
     def first_visit_dates(self) -> dict:

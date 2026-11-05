@@ -1,6 +1,9 @@
 """Plain-language "How it's calculated" text for every Master Dashboard number (shown on hover)."""
 
-ACTIVE = "a completed visit in the last 90 days or a visit booked in the next 60 days"
+ACTIVE = (
+    "a completed visit in the last 90 days or a visit booked in the next 60 days. A client whose recurring "
+    "service was cancelled (job closed in Jobber) stops counting on the close date"
+)
 EXCLUDES = "Clean on the Go's own jobs are left out."
 
 HOW = {
@@ -39,7 +42,7 @@ HOW = {
     "avg_new_client_value": "Average price of the first completed visit of each new client in the period, before tax. First visits with no price in Jobber are left out.",
     "returning_clients": "Clients who were not active at the start of the period, are active at the end, and had a completed visit before the period.",
     "gained_clients": "Clients active at the end of the period who weren't at the start: returning clients, new clients, and new bookings whose first visit hasn't happened yet. A new client who booked before the period started was already active then, so isn't counted here.",
-    "lost_clients": "Clients active at the start of the period but no longer active at the end (no completed visit in 90 days and nothing booked).",
+    "lost_clients": "Clients active at the start of the period but no longer active at the end: their recurring service was cancelled, or no completed visit in 90 days and nothing booked.",
     "net_client_growth": "Active clients at the end minus active clients at the start (= gained − lost).",
     # Recurring
     "active_recurring_clients": "Clients with an active or paused recurring job in Jobber at the end of the period. Paused clients are included.",

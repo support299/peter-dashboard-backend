@@ -3,6 +3,7 @@ from collections import defaultdict
 from datetime import timedelta
 from decimal import Decimal
 
+from django.db.models import Q
 from django.utils import timezone
 
 from analytics.models import KpiDefinition, MetricFact
@@ -806,19 +807,20 @@ class JobberSyncService:
 
     def _prune_visits(self, seen: set) -> int:
         """
-        Remove upcoming visits Jobber no longer has (deleted, or dropped when a job was closed).
-        Left behind, they keep a client 'active' and a recurring job running. Past visits are kept.
+        Remove visits Jobber no longer has (deleted, or dropped when a job was closed) that were never
+        done: upcoming ones, and past ones never completed. Left behind, they keep a client 'active'
+        and a recurring job running. Completed visits are history and always kept.
         """
         held = Visit.objects.filter(integration=self.integration).count()
         if not held or len(seen) < held * VISIT_PRUNE_MIN_SHARE:
             return 0
         cutoff = timezone.now() - timedelta(days=1)
-        upcoming = Visit.objects.filter(integration=self.integration, start_at__gte=cutoff)
-        gone = [external_id for external_id in upcoming.values_list("external_id", flat=True) if external_id not in seen]
+        not_done = Visit.objects.filter(integration=self.integration).filter(Q(start_at__gte=cutoff) | Q(is_complete=False))
+        gone = [external_id for external_id in not_done.values_list("external_id", flat=True) if external_id not in seen]
         for start in range(0, len(gone), 1000):  # stay well under the database's parameter limit
             Visit.objects.filter(integration=self.integration, external_id__in=gone[start : start + 1000]).delete()
         if gone:
-            logger.info("Removed %s upcoming visits Jobber no longer has", len(gone))
+            logger.info("Removed %s visits Jobber no longer has (never completed)", len(gone))
         return len(gone)
 
     def _visits_via_jobs(self):

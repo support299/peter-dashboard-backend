@@ -64,12 +64,14 @@ class VisitPruneTests(MasterDashboardDataMixin, TestCase):
         now = timezone.now()
         for n in range(20):
             Visit.objects.create(integration=self.integration, external_id=f"pv{n}", client=self.alice, start_at=now + timedelta(days=n + 2))
-        Visit.objects.create(integration=self.integration, external_id="gone-past", client=self.alice, start_at=now - timedelta(days=30))
+        Visit.objects.create(integration=self.integration, external_id="gone-past", client=self.alice, start_at=now - timedelta(days=30), is_complete=True)
+        Visit.objects.create(integration=self.integration, external_id="gone-booking", client=self.alice, start_at=now - timedelta(days=20), is_complete=False)
         held = set(Visit.objects.values_list("external_id", flat=True))
-        seen = held - {"pv0", "gone-past"}
-        self.assertEqual(self.sync()._prune_visits(seen), 1)
+        seen = held - {"pv0", "gone-past", "gone-booking"}
+        self.assertEqual(self.sync()._prune_visits(seen), 2)
         self.assertFalse(Visit.objects.filter(external_id="pv0").exists())
-        self.assertTrue(Visit.objects.filter(external_id="gone-past").exists())  # history stays
+        self.assertFalse(Visit.objects.filter(external_id="gone-booking").exists())  # a deleted booking, never done
+        self.assertTrue(Visit.objects.filter(external_id="gone-past").exists())  # completed work stays
 
     def test_a_short_response_removes_nothing(self):
         held = list(Visit.objects.values_list("external_id", flat=True))
@@ -160,6 +162,17 @@ class CloseDateTests(MasterDashboardDataMixin, TestCase):
         self.assertEqual([r["client"] for r in drill["rows"]], ["Sandra Weir"])
         self.assertEqual(drill["rows"][0]["last_visit"], date(2026, 7, 20))
         self.assertTrue(drill["rows"][0]["reason"])  # from the "Cancelled visit" task, a secondary signal
+
+        # Sandra stops being an active client on the close date (Sep 14), not 90 days after the July cleaning.
+        flows = Metrics(self.integration)
+        self.assertIn(gone.id, flows.active_client_ids(date(2026, 9, 13)))
+        self.assertNotIn(gone.id, flows.active_client_ids(date(2026, 9, 14)))
+        self.assertIn(switch.id, flows.active_client_ids(date(2026, 9, 14)))  # a new job is still running
+        quiet = Client.objects.create(integration=self.integration, external_id="cq", name="Stopped but not closed")
+        idle = self.job(quiet, job_status="action_required")
+        self.visits(idle, [date(2026, 8, 3), date(2026, 8, 17)])  # visits stopped, job still open in Jobber
+        rebuild_mrr(self.integration, today=TODAY)
+        self.assertIn(quiet.id, Metrics(self.integration).active_client_ids(date(2026, 10, 1)))  # 90-day rule still applies
 
         week = periods.build("week", date(2026, 9, 13))  # Sep 13-19
         self.assertEqual(Metrics(self.integration).value("cancelled_recurring_clients", week), 1)
