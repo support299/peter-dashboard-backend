@@ -1,7 +1,9 @@
 from celery import shared_task
 
 
-@shared_task(name="integrations.tasks.sync_jobber_full", bind=True, max_retries=1, soft_time_limit=3600, time_limit=3900)
+# A full sync takes about an hour (Jobber's rate limit sets the pace) and grows with the account: a
+# 1-hour limit stopped it before visits and the dashboard rebuild (Nov 2026). Allow 3 hours.
+@shared_task(name="integrations.tasks.sync_jobber_full", bind=True, max_retries=1, soft_time_limit=3 * 3600, time_limit=3 * 3600 + 900)
 def sync_jobber_full(self):
     """Daily Jobber full sync (entities + tasks + metric facts + cancellations)."""
     from integrations.models import Integration, SyncRun
