@@ -123,7 +123,7 @@ def evaluate(metrics, period, comps, rules=None) -> list[dict]:
             )
         else:
             other = comps.get(rule.compare_to)
-            before = metrics.value(rule.metric, other) if other else None
+            before = metrics.compared(rule.metric, other) if other else None
             if before is None or Decimal(before) == 0:
                 result["message"] = "Nothing to compare with."
                 out.append(result)

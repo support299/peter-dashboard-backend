@@ -170,3 +170,24 @@ class WeeklyPagesTests(MasterDashboardDataMixin, TestCase):
             for metric in HANDLERS:
                 response = self.client.get(f"/api/insights/drill/?metric={metric}&period={kind}&anchor=2026-10-07")
                 self.assertIn(response.status_code, (200, 400, 403), f"{kind} {metric} {response.content[:200]}")
+
+
+class PartialComparisonTests(MasterDashboardDataMixin, TestCase):
+    def test_a_comparison_that_starts_before_its_data_is_na(self):
+        from operations.models import CANCELLATION_VISIT, CancellationRecord, JobberTask
+
+        for n, day in enumerate([date(2026, 7, 20), date(2026, 10, 5), date(2026, 10, 6)]):
+            task = JobberTask.objects.create(integration=self.integration, external_id=f"pc{n}", title="Cancelled visit")
+            CancellationRecord.objects.create(integration=self.integration, jobber_task=task, jobber_task_external_id=f"pc{n}", cancellation_type=CANCELLATION_VISIT, client=self.alice, task_date=day)
+        from datetime import timedelta
+
+        from insights.metrics import what_changed
+
+        metrics = Metrics(self.integration)
+        start = metrics.data_starts()["cancellations"]
+        partial = periods.build("custom", start - timedelta(days=10), end=start + timedelta(days=20))  # half before the records begin
+        later = periods.build("custom", start + timedelta(days=31), end=start + timedelta(days=61))
+        self.assertIsNotNone(metrics.value("cancelled_visits", partial))
+        self.assertIsNone(metrics.card("cancelled_visits", later, {"previous": partial})["previous"])
+        self.assertNotIn("cancelled_visits", [item["key"] for item in what_changed(metrics, later, partial)])
+        self.assertIsNotNone(metrics.card("cancelled_visits", later, {"previous": later.previous()})["previous"])  # fully covered

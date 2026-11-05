@@ -120,11 +120,11 @@ KPIS = {
     "mrr_net_new": kpi("Net MRR"),
     "mrr_paused": kpi("Paused MRR", better="down", drill="paused_clients", point_in_time=True),
     # Cancellations
-    "cancelled_visits": kpi("Cancelled visits", kind="count", better="down", drill="cancelled_visits"),
-    "cancelled_visits_value": kpi("Value of cancelled visits", better="down", drill="cancelled_visits"),
-    "cancelled_jobs": kpi("Cancelled recurring jobs (tasks)", kind="count", better="down", drill="cancelled_jobs"),
-    "cancelled_jobs_value": kpi("Monthly value of cancelled jobs", better="down", drill="cancelled_jobs"),
-    "cancellations_internal": kpi("Cancellations caused internally", kind="count", better="down", drill="cancelled_visits_internal"),
+    "cancelled_visits": kpi("Cancelled visits", kind="count", better="down", drill="cancelled_visits", source="cancellations"),
+    "cancelled_visits_value": kpi("Value of cancelled visits", better="down", drill="cancelled_visits", source="cancellations"),
+    "cancelled_jobs": kpi("Cancelled recurring jobs (tasks)", kind="count", better="down", drill="cancelled_jobs", source="cancellations"),
+    "cancelled_jobs_value": kpi("Monthly value of cancelled jobs", better="down", drill="cancelled_jobs", source="cancellations"),
+    "cancellations_internal": kpi("Cancellations caused internally", kind="count", better="down", drill="cancelled_visits_internal", source="cancellations"),
     # Quality
     "touch_ups": kpi("Touch-up / redo visits", kind="count", better="down", drill="touch_ups"),
     "touch_up_rate": kpi("Redo rate per 100 visits", kind="rate", better="down", drill="touch_ups"),
@@ -542,6 +542,18 @@ class Metrics(FinanceMetrics, SalesMetrics, HubMetrics):
         start = self.data_starts().get(source)
         return bool(start) and period.end >= start
 
+    def comparable(self, key: str, other: Period) -> bool:
+        """
+        A comparison period that starts before its data does (cancellations only from Jul 17, 2026,
+        hours from the Hub's first day…) would compare a full period with part of one: n/a instead.
+        """
+        meta = KPIS[key]
+        start = self.data_starts().get(meta["source"]) if meta["source"] else None
+        return not (start and other.start < start and not meta["point_in_time"])
+
+    def compared(self, key: str, other: Period):
+        return self.value(key, other) if self.comparable(key, other) else None
+
     # ——— public ———
     def value(self, key: str, period: Period):
         cache_key = (key, period.kind, period.start, period.end)
@@ -564,7 +576,7 @@ class Metrics(FinanceMetrics, SalesMetrics, HubMetrics):
         # Receivables are a live balance with no history, so they have no comparison.
         if key not in {"ar_balance", "ar_overdue"}:
             for name, other in comparisons.items():
-                payload[name] = self.value(key, other)
+                payload[name] = self.compared(key, other)
         start = self.data_starts().get(meta["source"]) if meta["source"] else None
         if current is None and meta["source"] == "expenses":
             payload["note"] = self.finance_note(key, period)
@@ -1067,7 +1079,7 @@ def what_changed(metrics: Metrics, period: Period, other: Period, limit=8) -> li
     out = []
     for key in CHANGE_WATCH:
         meta = KPIS[key]
-        cur, prev = metrics.value(key, period), metrics.value(key, other)
+        cur, prev = metrics.value(key, period), metrics.compared(key, other)
         if cur is None or prev is None:
             continue
         cur, prev = Decimal(cur), Decimal(prev)
