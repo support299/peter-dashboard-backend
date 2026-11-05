@@ -1,12 +1,14 @@
 import json
 import logging
 import threading
+from datetime import timedelta
 from urllib.parse import urlencode
 
 from django.conf import settings
 from django.db import close_old_connections
 from django.http import HttpResponseRedirect, JsonResponse
 from django.urls import path
+from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
@@ -57,7 +59,19 @@ def _start_sync(integration: Integration) -> SyncRun:
     return run
 
 
+# Longer than the nightly sync's hard time limit (3h15m): a run still "running" after this was killed
+# or the server restarted, and it would otherwise show "Updating…" and block Refresh forever.
+STALE_SYNC_AFTER = timedelta(hours=4)
+
+
+def close_stale_runs(integration: Integration) -> int:
+    return integration.sync_runs.filter(
+        status__in=[SyncRun.STATUS_QUEUED, SyncRun.STATUS_RUNNING], created_at__lt=timezone.now() - STALE_SYNC_AFTER
+    ).update(status=SyncRun.STATUS_FAILED, error_message="Stopped without finishing (timed out or the server restarted).", finished_at=timezone.now())
+
+
 def _latest_sync_run(integration: Integration):
+    close_stale_runs(integration)
     inflight = (
         integration.sync_runs.filter(status__in=[SyncRun.STATUS_QUEUED, SyncRun.STATUS_RUNNING])
         .order_by("-id")
@@ -142,6 +156,7 @@ def sync(request):
     integration = _active_jobber()
     if not integration or not integration.access_token:
         return JsonResponse({"ok": False, "error": "Jobber is not connected."}, status=400)
+    close_stale_runs(integration)
     if integration.sync_runs.filter(status__in=[SyncRun.STATUS_QUEUED, SyncRun.STATUS_RUNNING]).exists():
         return JsonResponse({"ok": False, "error": "A sync is already running."}, status=409)
     run = _start_sync(integration)

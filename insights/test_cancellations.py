@@ -163,3 +163,22 @@ class CloseDateTests(MasterDashboardDataMixin, TestCase):
 
         week = periods.build("week", date(2026, 9, 13))  # Sep 13-19
         self.assertEqual(Metrics(self.integration).value("cancelled_recurring_clients", week), 1)
+
+
+class StaleSyncTests(MasterDashboardDataMixin, TestCase):
+    def test_a_sync_stuck_for_days_no_longer_shows_updating_or_blocks_refresh(self):
+        from integrations.models import SyncRun
+        from integrations.views import _serialize_integration
+
+        stuck = SyncRun.objects.create(integration=self.integration, kind=SyncRun.KIND_FULL, status=SyncRun.STATUS_RUNNING)
+        SyncRun.objects.filter(pk=stuck.pk).update(created_at=timezone.now() - timedelta(days=12))
+        done = SyncRun.objects.create(integration=self.integration, kind=SyncRun.KIND_FULL, status=SyncRun.STATUS_SUCCESS)
+        payload = _serialize_integration(self.integration)
+        self.assertNotEqual(payload["status"], "syncing")
+        self.assertEqual(payload["sync"]["id"], done.id)
+        stuck.refresh_from_db()
+        self.assertEqual(stuck.status, SyncRun.STATUS_FAILED)
+
+        live = SyncRun.objects.create(integration=self.integration, kind=SyncRun.KIND_FULL, status=SyncRun.STATUS_RUNNING)
+        payload = _serialize_integration(self.integration)
+        self.assertEqual((payload["status"], payload["sync"]["id"]), ("syncing", live.id))  # a real sync in progress stays
