@@ -86,9 +86,10 @@ class WeeklyMetricsTests(MasterDashboardDataMixin, TestCase):
         self.assertEqual(self.metrics.value("mrr_reactivated", week), D("300"))
         self.assertEqual(self.metrics.value("mrr_churned", week), D("250"))
         self.assertEqual(self.metrics.value("new_recurring_clients", week), 1)
-        for key in ("mrr_expansion", "mrr_contraction", "mrr_net_new", "recurring_retention"):
+        self.assertEqual(self.metrics.value("mrr_net_new", week), D("550"))  # 500 new + 300 back − 250 lost
+        for key in ("mrr_expansion", "mrr_contraction", "recurring_retention"):
             self.assertIsNone(self.metrics.value(key, week), key)
-        card = self.metrics.card("mrr_net_new", week, {})
+        card = self.metrics.card("mrr_expansion", week, {})
         self.assertIn("by month only", card["note"])
         self.assertIsNotNone(self.metrics.value("mrr", week))  # current MRR is the month's
         day = periods.build("day", date(2026, 10, 8))
@@ -133,7 +134,7 @@ class WeeklyMetricsTests(MasterDashboardDataMixin, TestCase):
         self.assertEqual({r["priced_from"] for r in drill["rows"]}, {"Invoice", "Job price (not invoiced yet)"})
 
     def test_ceo_view_has_the_new_cards_on_a_week(self):
-        for key in ("mrr_new", "mrr_churned", "new_recurring_clients", "new_one_off_jobs", "new_one_off_revenue", "avg_one_off_price", "cancelled_recurring_clients"):
+        for key in ("mrr_new", "mrr_churned", "mrr_net_new", "new_recurring_clients", "new_one_off_jobs", "new_one_off_revenue", "avg_one_off_price", "cancelled_recurring_clients"):
             self.assertIn(key, SCORECARD)
         self.client.force_login(get_user_model().objects.create_superuser("boss", "b@x.ca", "pw"))
         for kind in ("week", "day"):

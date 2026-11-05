@@ -62,7 +62,7 @@ HOW = {
     "avg_one_off_price": "New one-off jobs revenue ÷ the number of those jobs, leaving out jobs with no price.",
     "mrr_paused_net": "MRR moved out of Active MRR by pauses (negative) or back in by resumed clients (positive).",
     "mrr_untracked": "Price or frequency changes in months before tracking started, which can't be split into expansion or contraction.",
-    "mrr_net_new": "Ending MRR minus starting MRR (new + expansion + reactivated − contraction − churned ± pauses).",
+    "mrr_net_new": "How much MRR grew or shrank: ending MRR minus starting MRR (new + expansion + reactivated − contraction − lost ± pauses). On a day or week: new + reactivated − lost.",
     "mrr_paused": "MRR of clients currently marked Paused or Scheduled to resume. Not included in Active MRR.",
     # Cancellations
     "cancelled_visits": "'Cancelled Visit' tasks created in Jobber, dated in the period. Records start in July 2026.",

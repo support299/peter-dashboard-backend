@@ -47,7 +47,7 @@ DRIVE_RATE_FALLBACK = Decimal(18)  # Peter, Oct 2026: when a person has no drive
 DRIVING_POSITIONS = {"cleaning technician", "cleaning specialist", "specialty cleaner"}
 HOURS_DIVISION_NOTE = "Hours are not split by division, so this is shown for all divisions only."
 # On a day or week, MRR moves only through recurring jobs starting or being cancelled (see mrr.event_movements).
-MONTH_ONLY_MRR = {"mrr_starting", "mrr_net_new", "mrr_expansion", "mrr_contraction", "mrr_paused_net", "mrr_untracked", "recurring_retention"}
+MONTH_ONLY_MRR = {"mrr_starting", "mrr_expansion", "mrr_contraction", "mrr_paused_net", "mrr_untracked", "recurring_retention"}
 MONTH_ONLY_NOTE = "Worked out by month only. Pick Month, Quarter or Year to see it."
 LATE_DIVISION_NOTE = "Late arrivals aren't split by division, so this is shown for all divisions only."
 LEADS_DIVISION_NOTE = "Leads aren't split by division (a calculator quote has no division yet), so this is shown for all divisions only."
@@ -117,7 +117,7 @@ KPIS = {
     "mrr_churned": kpi("Lost MRR", better="down", drill="mrr_churned"),
     "mrr_paused_net": kpi("Paused / resumed MRR", drill="mrr_paused"),
     "mrr_untracked": kpi("Other changes (before tracking)", drill="mrr_untracked"),
-    "mrr_net_new": kpi("Net new MRR"),
+    "mrr_net_new": kpi("Net MRR"),
     "mrr_paused": kpi("Paused MRR", better="down", drill="paused_clients", point_in_time=True),
     # Cancellations
     "cancelled_visits": kpi("Cancelled visits", kind="count", better="down", drill="cancelled_visits"),
@@ -194,6 +194,7 @@ SCORECARD = [
     # Added for Peter, Nov 2026
     "mrr_new",
     "mrr_churned",
+    "mrr_net_new",  # Peter, Nov 2026: next to Lost MRR
     "new_recurring_clients",
     "new_one_off_jobs",
     "new_one_off_revenue",
@@ -870,7 +871,11 @@ class Metrics(FinanceMetrics, SalesMetrics, HubMetrics):
         return None if self._month_only("mrr_starting", period) else self._mrr_value(period, "starting")
 
     def _mrr_net_new(self, period):
-        return None if self._month_only("mrr_net_new", period) else self._mrr_value(period, "net_new")
+        if period.kind in SHORT_KINDS:
+            # A day or week only sees jobs starting and closing: new + reactivated − lost.
+            parts = [self.value(key, period) for key in ("mrr_new", "mrr_reactivated", "mrr_churned")]
+            return None if None in parts else parts[0] + parts[1] - parts[2]
+        return self._mrr_value(period, "net_new")
 
     def _mrr_paused(self, period):
         return self._mrr_value(period, "paused_ending")
