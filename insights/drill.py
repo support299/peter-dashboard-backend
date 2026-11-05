@@ -686,7 +686,7 @@ HANDLERS = {
     "mrr_expansion": _movement("Expansion MRR", {"expansion"}),
     "mrr_reactivated": _movement("Reactivated MRR", {"reactivated"}),
     "mrr_contraction": _movement("Contraction MRR", {"contraction"}),
-    "mrr_churned": _movement("Churned MRR", {"churned"}),
+    "mrr_churned": _movement("Lost MRR", {"churned"}),
     "mrr_paused": _movement("Paused / resumed MRR", {"paused", "resumed"}),
     "mrr_untracked": _movement("MRR changes before tracking started", {"untracked"}),
     "cancelled_visits": _cancellations("Cancelled visits", CANCELLATION_VISIT),

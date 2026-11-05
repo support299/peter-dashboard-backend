@@ -234,10 +234,10 @@ def mrr(request):
             {"key": "mrr_expansion", "label": "Expansion", "value": result.totals["expansion"] if expansion_ok else None, "type": "delta"},
             {"key": "mrr_contraction", "label": "Contraction", "value": result.totals["contraction"] if expansion_ok else None, "type": "delta"},
             {"key": "mrr_paused", "label": "Paused / resumed", "value": result.totals["paused"] + result.totals["resumed"], "type": "delta"},
-            {"key": "mrr_churned", "label": "Churned", "value": result.totals["churned"], "type": "delta"},
+            {"key": "mrr_churned", "label": "Lost", "value": result.totals["churned"], "type": "delta"},
         ]
         if result.totals["untracked"]:
-            steps.append({"key": "mrr_untracked", "label": "Before tracking", "value": result.totals["untracked"], "type": "delta"})
+            steps.append({"key": "mrr_untracked", "label": "Other changes (before tracking)", "value": result.totals["untracked"], "type": "delta"})
         steps.append({"key": "mrr", "label": "Ending MRR", "value": result.ending, "type": "total"})
     return respond(
         {
