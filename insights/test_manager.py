@@ -165,6 +165,10 @@ class PeterAnswersTests(MasterDashboardDataMixin, TestCase):
             HubComplaint.objects.create(external_id=ext, submitted_date=day, event_date=day, status=status)
         overdue = overdue_complaints(Metrics(self.integration))
         self.assertEqual(sorted(overdue.values_list("external_id", flat=True)), ["busy", "old"])
+        from insights.drill import drill
+
+        rows = drill(Metrics(self.integration), "complaints_overdue", periods.build("month", TODAY))["rows"]
+        self.assertEqual({row["open"] for row in rows}, {"https://hub.cleanonthego.com/admin/submissions/old", "https://hub.cleanonthego.com/admin/submissions/busy"})
 
     def test_visits_to_rebook(self):
         make = lambda ext, day, **kw: Visit.objects.create(integration=self.integration, external_id=ext, client=self.alice, start_at=at(day), **kw)  # noqa: E731

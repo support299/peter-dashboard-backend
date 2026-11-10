@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from urllib.parse import quote
 from decimal import Decimal
 
 from django.db.models import Max, Min, Q, Sum
@@ -584,7 +585,11 @@ def _google_all(metrics, period, **_):
     return _result("Google reviews", REVIEW_COLUMNS, _review_rows(metrics.google().filter(submitted_date__lte=period.end)))
 
 
+# Opens the complaint's edit dialog in the Hub (log in first if needed), to update or resolve it.
+HUB_SUBMISSION_URL = "https://hub.cleanonthego.com/admin/submissions/{id}"
+
 COMPLAINT_COLUMNS = [
+    col("open", "", "link"),
     col("date", "Date", "date"),
     col("client", "Client"),
     col("type", "Type"),
@@ -616,6 +621,8 @@ def _complaint_rows(qs):
                 "days": (c.resolved_date - c.event_date).days if c.resolved_date and c.event_date else None,
                 "what_happened": c.what_happened,
                 "how_fixed": c.how_fixed,
+                "open": HUB_SUBMISSION_URL.format(id=quote(str(c.external_id), safe="")) if c.external_id else "",
+                "open_label": "Open in Hub ↗",
             }
         )
     return rows
