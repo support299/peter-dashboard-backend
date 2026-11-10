@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from accounts.models import PasswordResetToken, RefreshToken
+from accounts.models import PasswordResetToken, RefreshToken, UserAccess
 
 
 @admin.register(RefreshToken)
@@ -16,3 +16,9 @@ class PasswordResetTokenAdmin(admin.ModelAdmin):
     list_display = ("id", "user", "created_at", "expires_at", "used_at")
     search_fields = ("user__username", "user__email")
     readonly_fields = ("token_hash", "created_at")
+
+
+@admin.register(UserAccess)
+class UserAccessAdmin(admin.ModelAdmin):
+    list_display = ("user", "pages", "updated_at")
+    search_fields = ("user__username", "user__email")

@@ -42,6 +42,7 @@ def _client_ip(request):
 
 
 def _user_payload(user):
+    from accounts.access import allowed_pages
     from financials.access import finance_role
 
     return {
@@ -52,6 +53,8 @@ def _user_payload(user):
         "last_name": user.last_name,
         "is_staff": bool(user.is_staff or user.is_superuser),
         "finance_role": finance_role(user),
+        # None = every page; otherwise only these (e.g. ["master:manager"]).
+        "pages": allowed_pages(user),
     }
 
 

@@ -145,3 +145,18 @@ class PasswordResetToken(models.Model):
     def mark_used(self):
         self.used_at = timezone.now()
         self.save(update_fields=["used_at"])
+
+
+class UserAccess(models.Model):
+    """Pages a user may open (see accounts.access). No row or no pages = full access."""
+
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="page_access")
+    pages = models.JSONField(default=list, blank=True, help_text='e.g. ["master:manager"] for the Manager overview only. Empty = everything.')
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "page access"
+        verbose_name_plural = "page access"
+
+    def __str__(self):
+        return f"{self.user} · {', '.join(self.pages) or 'everything'}"

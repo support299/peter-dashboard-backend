@@ -524,15 +524,29 @@ def trend(request):
     )
 
 
+def drill_allowed(user, key: str) -> bool:
+    from accounts.access import allowed_pages
+
+    pages = allowed_pages(user)
+    if pages is None:
+        return True
+    from insights.manager_views import MANAGER_DRILLS
+
+    return "master:manager" in pages and key in MANAGER_DRILLS
+
+
 @require_GET
 def drill_view(request):
+    # Permission first, before any data is touched.
+    key = request.GET.get("metric") or ""
+    if not drill_allowed(request.user, key):
+        return error("Your account doesn't have access to this list.", status=403)
     metrics, period, comps = _context(request)
     if not metrics:
         return _no_integration()
     which = request.GET.get("of") or "current"
     if which in comps:
         period = comps[which]
-    key = request.GET.get("metric") or ""
     result = drill(metrics, key, period, category=request.GET.get("category") or "")
     return respond({"metric": key, "period": period.as_dict(), **result})
 

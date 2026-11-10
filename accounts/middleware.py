@@ -5,6 +5,7 @@ from accounts.authz import (
     requires_staff_path,
     resolve_api_user,
 )
+from accounts.access import api_allowed
 
 
 class JWTAuthenticationMiddleware:
@@ -13,13 +14,16 @@ class JWTAuthenticationMiddleware:
     - public paths: pass through (login, refresh, forgot/reset, OAuth callback, signed webhooks)
     - everything else: require active authenticated user (JWT Bearer or session)
     - staff-only prefixes: require is_staff / superuser
+    - users limited to some pages (accounts.access): only the APIs those pages use
     """
 
     def __init__(self, get_response):
         self.get_response = get_response
 
     def __call__(self, request):
-        path = request.path
+        # path_info is what URL routing matches; checking request.path (which adds any script
+        # prefix) could let a crafted prefix pass the checks below and still reach another view.
+        path = request.path_info
 
         if not path.startswith("/api/"):
             return self.get_response(request)
@@ -44,5 +48,8 @@ class JWTAuthenticationMiddleware:
                 {"ok": False, "error": "You do not have permission to perform this action."},
                 status=403,
             )
+
+        if not api_allowed(user, path):
+            return JsonResponse({"ok": False, "error": "Your account doesn't have access to this page."}, status=403)
 
         return self.get_response(request)

@@ -257,11 +257,50 @@ class BookingsTests(MasterDashboardDataMixin, TestCase):
         done = Client.objects.create(integration=self.integration, external_id="done", name="Done", email="done@client.ca")
         self._calc("calc-done", "done@client.ca", TODAY - timedelta(days=3))
         job = Job.objects.create(integration=self.integration, external_id="j-done", client=done, source_created_at=at(TODAY - timedelta(days=2)))
-        Visit.objects.create(integration=self.integration, external_id="v-done", client=done, job=job, start_at=at(TODAY + timedelta(days=4)))
+        Visit.objects.create(integration=self.integration, external_id="v-done", client=done, job=job, start_at=at(TODAY + timedelta(days=4)), source_created_at=at(TODAY - timedelta(days=2)))
         quoted = Client.objects.create(integration=self.integration, external_id="quoted", name="Quoted")
         Quote.objects.create(integration=self.integration, external_id="q-wait", client=quoted, quote_status="approved", subtotal=D(500),
                              source_created_at=at(TODAY - timedelta(days=6)), transitioned_at=at(TODAY - timedelta(days=5)))
         self._calc("calc-old", "old@client.ca", TODAY - timedelta(days=90))  # older than 60 days: not listed
+        # A visit added to a job the client already had counts as scheduled too.
+        regular = Client.objects.create(integration=self.integration, external_id="regular", name="Regular", email="regular@client.ca")
+        old_job = Job.objects.create(integration=self.integration, external_id="j-old", client=regular, source_created_at=at(TODAY - timedelta(days=300)))
+        self._calc("calc-regular", "regular@client.ca", TODAY - timedelta(days=4))
+        Visit.objects.create(integration=self.integration, external_id="v-added", client=regular, job=old_job, start_at=at(TODAY + timedelta(days=2)), source_created_at=at(TODAY - timedelta(days=2)))
         waiting = to_confirm(self.integration, now=now)
         self.assertEqual(sorted(b.source for b in waiting), ["calculator", "quote"])
         self.assertEqual({b.kind for b in waiting}, {"One-off"})
+
+
+class ManagerOnlyAccessTests(MasterDashboardDataMixin, TestCase):
+    """Peter, Nov 11 2026: Cassidy sees the Manager overview only."""
+
+    def setUp(self):
+        from accounts.models import UserAccess
+
+        for target in ("django.utils.timezone.localdate", "insights.periods.today"):
+            patcher = mock.patch(target, return_value=TODAY)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.cassidy = get_user_model().objects.create_user("cassidy", "c@x.ca", "pw")
+        UserAccess.objects.create(user=self.cassidy, pages=["master:manager"])
+        self.client.force_login(self.cassidy)
+
+    def test_only_the_manager_page_and_its_lists(self):
+        me = self.client.get("/api/accounts/me/").json()["user"]
+        self.assertEqual(me["pages"], ["master:manager"])
+        self.assertEqual(self.client.get("/api/insights/manager/").status_code, 200)
+        self.assertEqual(self.client.get("/api/insights/manager/history/").status_code, 200)
+        self.assertEqual(self.client.get("/api/insights/drill/?metric=visits_to_rebook").status_code, 200)
+        self.assertEqual(self.client.get("/api/insights/drill/?metric=leads").status_code, 200)  # New leads card
+        self.assertEqual(self.client.get("/api/insights/drill/?metric=expenses_cogs").status_code, 403)  # not on her page
+        for path in ("/api/insights/overview/", "/api/insights/revenue/", "/api/operations/dashboard/", "/api/admin-internal/status/", "/api/pricing-calculator/status/", "/api/financials/expenses/"):
+            self.assertEqual(self.client.get(path).status_code, 403, path)
+        self.assertEqual(self.client.post("/api/jobber/sync/").status_code, 403)
+        self.assertEqual(self.client.get("/api/jobber/status/").status_code, 200)
+
+    def test_everyone_else_keeps_full_access(self):
+        other = get_user_model().objects.create_user("peter", "p@x.ca", "pw")
+        self.client.force_login(other)
+        self.assertIsNone(self.client.get("/api/accounts/me/").json()["user"]["pages"])
+        self.assertEqual(self.client.get("/api/insights/overview/").status_code, 200)

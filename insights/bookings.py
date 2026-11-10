@@ -8,7 +8,8 @@ A booking         = a Jobber quote approved or converted (dated when it changed 
                     booking: counted once, as the quote.
 Recurring         = the client got a recurring job created from the booking's creation to MATCH_DAYS after
                     approval. Bookings won leaves these out (Peter: accepted bookings that are not recurring).
-Scheduled         = the client has a job created on/after the booking with at least one visit not cancelled.
+Scheduled         = a visit (not cancelled) was created for the client on/after the booking: on a new job,
+                    or added to a job they already had.
 First visits to confirm = bookings of the last CONFIRM_DAYS days that aren't scheduled yet, one-off or recurring.
 """
 
@@ -105,17 +106,19 @@ def approved_bookings(integration, start: datetime, end: datetime) -> list[Booki
     ]
 
     all_ids = {cid for b in bookings for cid in b.client_ids}
-    jobs = defaultdict(list)  # client -> [(created, recurring, has visit)]
-    with_visits = set(Visit.objects.filter(job__client_id__in=all_ids, is_cancelled=False).values_list("job_id", flat=True).distinct())
-    for jid, cid, created, recurring in Job.objects.filter(integration=integration, client_id__in=all_ids).values_list("id", "client_id", "source_created_at", "is_recurring"):
+    jobs = defaultdict(list)  # client -> [(created, recurring)]
+    for cid, created, recurring in Job.objects.filter(integration=integration, client_id__in=all_ids).values_list("client_id", "source_created_at", "is_recurring"):
         if created:
-            jobs[cid].append((created, recurring, jid in with_visits))
+            jobs[cid].append((created, recurring))
+    visits = defaultdict(list)  # client -> [visit created]
+    for cid, created in Visit.objects.filter(integration=integration, client_id__in=all_ids, is_cancelled=False).values_list("client_id", "source_created_at"):
+        if created:
+            visits[cid].append(created)
     for b in bookings:
         low = b.created - timedelta(days=1)
         high = b.approved + window
-        mine = [j for cid in b.client_ids for j in jobs.get(cid, [])]
-        b.recurring = any(recurring and low <= created <= high for created, recurring, _ in mine)
-        b.scheduled = any(has_visit and created >= low for created, _, has_visit in mine)
+        b.recurring = any(recurring and low <= created <= high for cid in b.client_ids for created, recurring in jobs.get(cid, []))
+        b.scheduled = any(created >= low for cid in b.client_ids for created in visits.get(cid, []))
     return sorted(bookings, key=lambda b: b.approved)
 
 
