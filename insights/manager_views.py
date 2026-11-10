@@ -90,8 +90,12 @@ def staffing() -> dict:
 
 
 def attention(metrics) -> dict:
+    from insights.bookings import to_confirm
+
     rebook, older = visits_to_rebook(metrics)
+    confirm = to_confirm(metrics.integration)
     return {
+        "first_visits_to_confirm": len(confirm),
         "visits_to_rebook": rebook.count(),
         "visits_to_rebook_older": older,
         "rebook_days": REBOOK_DAYS,

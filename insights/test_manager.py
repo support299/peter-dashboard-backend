@@ -132,7 +132,7 @@ class ManagerPageTests(MasterDashboardDataMixin, TestCase):
         page = self.client.get("/api/insights/manager/").json()
         self.assertEqual([c["key"] for c in page["headline"]][:3], ["leads", "bookings_won", "new_recurring_clients"])
         self.assertEqual({c["key"] for c in page["sales"]}, {"avg_booking_price", "open_leads"})
-        self.assertEqual(set(page["attention"]), {"visits_to_rebook", "visits_to_rebook_older", "rebook_days", "overdue_complaints"})
+        self.assertEqual(set(page["attention"]), {"first_visits_to_confirm", "visits_to_rebook", "visits_to_rebook_older", "rebook_days", "overdue_complaints"})
         self.assertIn("still_to_book", page["target"])
         staff = page["staffing"]
         self.assertEqual((staff["employees"], staff["contractors"]), (1, 1))
@@ -211,3 +211,57 @@ class PeterAnswersTests(MasterDashboardDataMixin, TestCase):
         self.assertEqual(forecast["forecast"], invoiced + expected + 80)
         self.assertEqual((forecast["still_to_book"], forecast["on_track"]), (max(D(1200) - forecast["forecast"], D(0)), forecast["forecast"] >= 1200))
         self.assertIsNone(Metrics(self.integration).value("revenue_target", periods.build("week", TODAY)))  # monthly only
+
+
+class BookingsTests(MasterDashboardDataMixin, TestCase):
+    """Peter, Nov 11 2026: calculator bookings count too; first visits to confirm."""
+
+    def setUp(self):
+        for target in ("django.utils.timezone.localdate", "insights.periods.today"):
+            patcher = mock.patch(target, return_value=TODAY)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        from insights.models import InsightsSetting
+
+        InsightsSetting.put("jobber_sales_sync", {"quotes": {"ok": True}})
+
+    def _calc(self, ext, email, day, total="300", status="approved"):
+        from analytics.pricing_models import PricingSubmission
+
+        return PricingSubmission.objects.create(
+            external_id=ext, status=status, customer_email=email, customer_first_name="Cal", final_total=D(total),
+            service_names=["Residential: First Cleaning"], source_created_at=at(day - timedelta(days=1)), source_updated_at=at(day),
+        )
+
+    def test_calculator_bookings_count_once_with_their_quote(self):
+        from insights.bookings import approved_bookings
+
+        day = date(2026, 10, 5)
+        self._calc("calc-new", "new@client.ca", day, "250")  # booked themselves, no Jobber client yet
+        self._calc("calc-pending", "maybe@client.ca", day, status="submitted")  # not approved
+        both = Client.objects.create(integration=self.integration, external_id="both", name="Both", email="both@client.ca")
+        self._calc("calc-both", "both@client.ca", day, "999")
+        Quote.objects.create(integration=self.integration, external_id="q-both", client=both, quote_status="converted", subtotal=D(350),
+                             source_created_at=at(day - timedelta(days=2)), transitioned_at=at(day + timedelta(days=1)))
+        october = periods.build("month", TODAY)
+        rows = approved_bookings(self.integration, october.start_dt, october.whole().end_dt)
+        self.assertEqual(sorted((b.source, str(b.amount)) for b in rows), [("calculator", "250.00"), ("quote", "350.00")])
+        metrics = Metrics(self.integration)
+        self.assertEqual((metrics.value("bookings_won", october), metrics.value("avg_booking_price", october)), (2, D("300.00")))
+
+    def test_first_visits_to_confirm(self):
+        from insights.bookings import to_confirm
+
+        now = at(TODAY)
+        self._calc("calc-waiting", "wait@client.ca", TODAY - timedelta(days=3))  # nothing in Jobber yet
+        done = Client.objects.create(integration=self.integration, external_id="done", name="Done", email="done@client.ca")
+        self._calc("calc-done", "done@client.ca", TODAY - timedelta(days=3))
+        job = Job.objects.create(integration=self.integration, external_id="j-done", client=done, source_created_at=at(TODAY - timedelta(days=2)))
+        Visit.objects.create(integration=self.integration, external_id="v-done", client=done, job=job, start_at=at(TODAY + timedelta(days=4)))
+        quoted = Client.objects.create(integration=self.integration, external_id="quoted", name="Quoted")
+        Quote.objects.create(integration=self.integration, external_id="q-wait", client=quoted, quote_status="approved", subtotal=D(500),
+                             source_created_at=at(TODAY - timedelta(days=6)), transitioned_at=at(TODAY - timedelta(days=5)))
+        self._calc("calc-old", "old@client.ca", TODAY - timedelta(days=90))  # older than 60 days: not listed
+        waiting = to_confirm(self.integration, now=now)
+        self.assertEqual(sorted(b.source for b in waiting), ["calculator", "quote"])
+        self.assertEqual({b.kind for b in waiting}, {"One-off"})

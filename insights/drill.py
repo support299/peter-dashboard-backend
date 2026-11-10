@@ -204,23 +204,35 @@ def _touch_ups(metrics, period, **_):
     return _result("Touch-up / redo visits", VISIT_COLUMNS, _visit_rows(qs), total_rows=qs.count())
 
 
-BOOKING_COLUMNS = [col("date", "Accepted", "date"), col("client", "Client"), col("quote", "Quote"), col("title", "Title"), col("amount", "Amount before tax", "currency")]
+BOOKING_COLUMNS = [col("date", "Approved", "date"), col("client", "Client"), col("source", "Booked through"), col("title", "Quote / services"), col("kind", "Type"), col("amount", "Amount", "currency")]
+
+
+def _booking_rows(bookings):
+    return [
+        {
+            "id": f"{b.source}-{b.id}",
+            "date": _local(b.approved),
+            "client": b.name or "—",
+            "source": b.reference,
+            "title": b.title,
+            "kind": b.kind,
+            "amount": b.amount,
+            "link": b.link,
+        }
+        for b in bookings
+    ]
 
 
 def _bookings_won(metrics, period, **_):
-    rows = [
-        {
-            "id": q.id,
-            "date": _local(q.transitioned_at),
-            "client": _client_name(q.client),
-            "quote": f"#{q.quote_number}" if q.quote_number else "",
-            "title": q.title,
-            "amount": q.subtotal if q.subtotal is not None else q.total,
-            "link": q.jobber_web_uri,
-        }
-        for q in reversed(metrics.won_bookings(period))
-    ]
-    return _result("Bookings won", BOOKING_COLUMNS, rows, note="Accepted quotes that didn't become a recurring job.")
+    rows = _booking_rows(reversed(metrics.won_bookings(period)))
+    return _result("Bookings won", BOOKING_COLUMNS, rows, note="Accepted Jobber quotes and Pricing Calculator bookings the client approved, except those that became a recurring job.")
+
+
+def _first_visits_to_confirm(metrics, period, **_):
+    from insights.bookings import CONFIRM_DAYS, to_confirm
+
+    rows = _booking_rows(to_confirm(metrics.integration))
+    return _result("First visits to confirm", BOOKING_COLUMNS, rows, kicker="As of today", note=f"Bookings approved in the last {CONFIRM_DAYS} days with no visit scheduled in Jobber yet.")
 
 
 # ——— clients ———
@@ -747,6 +759,7 @@ HANDLERS = {
     "visits_to_rebook": _visits_to_rebook,
     "revenue_expected": _revenue_expected,
     "bookings_won": _bookings_won,
+    "first_visits_to_confirm": _first_visits_to_confirm,
     "complaints_resolved": _complaints_resolved,
     "labour_hours": _labour_hours,
     "late_arrivals": _late_arrivals,
