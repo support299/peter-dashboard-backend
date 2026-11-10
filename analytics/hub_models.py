@@ -94,6 +94,11 @@ class HubLeaveRequest(models.Model):
     jobber_task_id = models.CharField(max_length=160, blank=True, default="")
     jobber_sync_error = models.TextField(blank=True, default="")
     decided_at = models.DateTimeField(null=True, blank=True)
+    # Nov 2026: opens the request in the Hub (…/admin/calendar?request=<submission_id>).
+    submission_id = models.CharField(max_length=120, blank=True, default="")
+    employee_role = models.CharField(max_length=64, blank=True, default="")  # employee / contractor
+    # [{jobber_visit_id, date, client_name, job_title, headcount}] on pending and approved requests
+    affected_visits = models.JSONField(default=list, blank=True)
     source_created_at = models.DateTimeField(null=True, blank=True)
     source_updated_at = models.DateTimeField(null=True, blank=True)
     source_payload = models.JSONField(default=dict, blank=True)

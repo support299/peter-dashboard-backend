@@ -107,6 +107,11 @@ HOW = {
     # Sales (later stage)
     "leads": "People who asked for a price in the period: finished Pricing Calculator quotes (with an email or phone) plus Jobber requests. One person counts once, however many quotes they made (matched by email, phone and Jobber client). They count again only after 90 days without contact.",
     "new_prospects": "Leads who weren't clients yet (no completed visit before the lead date). The funnel below follows these.",
+    "bookings_won": "Quotes accepted in the period that didn't become a recurring job (the client's jobs created within 30 days of acceptance are checked). Dated by when the quote was accepted.",
+    "avg_booking_price": "Average amount before tax of the bookings won ($0 quotes left out).",
+    "revenue_target": "The same month last year, invoiced revenue, plus 20%.",
+    "open_leads": "New prospects from the period who haven't accepted a quote or had a first cleaning yet.",
+    "visits_planned": "Every visit scheduled for the whole period, done or still to come. Cancelled visits are left out.",
     "leads_quoted": "New prospects who got a price: every finished calculator quote, or a Jobber quote within 90 days of the lead.",
     "leads_accepted": "New prospects who accepted: calculator quote approved, Jobber quote approved or converted, request converted, or a first cleaning done.",
     "leads_first_clean": "New prospects whose first completed visit came on or after the lead date (no time limit, so recent periods keep growing).",

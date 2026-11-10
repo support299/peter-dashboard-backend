@@ -126,6 +126,10 @@ class Period:
         end = start + timedelta(days=self.days - 1) if self.partial else full_end
         return Period(self.kind, start, min(end, full_end), full_end)
 
+    def whole(self) -> "Period":
+        """The full period even when it's cut at today (e.g. all of this month's planned visits)."""
+        return replace(self, end=self.full_end)
+
     def previous(self) -> "Period":
         if self.kind == "custom":
             return self.shifted(days=-self.days)

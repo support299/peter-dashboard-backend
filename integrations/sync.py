@@ -57,6 +57,7 @@ from operations.models import (
 from operations.taxonomy import classify_division, classify_service_type, seed_taxonomy_defaults
 from operations.cancellations import process_all_cancellation_tasks, process_cancellation_task
 from operations.taxonomy import cancellation_type_from_title
+from insights.capacity import is_capacity_task
 
 logger = logging.getLogger(__name__)
 
@@ -867,7 +868,7 @@ class JobberSyncService:
         try:
             for node in self._paginate("tasks", TASKS_SELECTION, extra_args=extra, page_size=100):
                 title = node.get("title") or ""
-                if cancellation_only and not cancellation_type_from_title(title):
+                if cancellation_only and not cancellation_type_from_title(title) and not is_capacity_task(title):
                     continue
                 task = self._upsert_task(node)
                 if task:

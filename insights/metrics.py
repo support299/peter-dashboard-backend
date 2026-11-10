@@ -34,9 +34,11 @@ from operations.models import (
     InvoiceLineItem,
     Job,
     PaymentRecord,
+    Quote,
     Visit,
 )
 
+TARGET_GROWTH = Decimal("1.20")  # revenue target = same month last year + 20%
 ACTIVE_LOOKBACK_DAYS = 90  # completed visit within the last 90 days …
 ACTIVE_LOOKAHEAD_DAYS = 60  # … or a booking coming up
 
@@ -61,6 +63,7 @@ KPIS = {
     # Revenue & profitability
     "revenue": kpi("Revenue", drill="revenue"),
     "invoiced_revenue": kpi("Invoiced revenue", drill="revenue"),
+    "revenue_target": kpi("Revenue target", note="Same month last year + 20%."),
     "discounts": kpi("Discounts", better="down", drill="revenue"),
     "completed_visit_value": kpi("Completed visit value", drill="visits_completed"),
     "payments_received": kpi("Payments received", drill="payments", source="payments"),
@@ -85,6 +88,7 @@ KPIS = {
     "expenses_pct": kpi("Expenses % of revenue", kind="percent", better="down", drill="expenses", source="expenses"),
     # Visits
     "visits_completed": kpi("Completed visits", kind="count", drill="visits_completed"),
+    "visits_planned": kpi("Planned visits", kind="count", drill="visits_planned"),
     "avg_revenue_per_visit": kpi("Avg revenue per visit"),
     # Clients
     "active_clients": kpi("Active clients", kind="count", drill="active_clients", point_in_time=True),
@@ -157,6 +161,9 @@ KPIS = {
     "ar_overdue": kpi("Overdue receivables", better="down", drill="receivables_overdue", point_in_time=True),
     # Sales (later stage)
     "leads": kpi("Leads", kind="count", drill="leads", source="leads"),
+    "open_leads": kpi("Open leads", kind="count", drill="leads_open", source="leads"),
+    "bookings_won": kpi("Bookings won", kind="count", drill="bookings_won", source="quotes"),
+    "avg_booking_price": kpi("Average booking price", drill="bookings_won", source="quotes"),
     "new_prospects": kpi("New prospects", kind="count", drill="leads_prospects", source="leads"),
     "leads_quoted": kpi("Quoted", kind="count", drill="leads_quoted", source="leads"),
     "leads_accepted": kpi("Accepted", kind="count", drill="leads_accepted", source="leads"),
@@ -535,6 +542,7 @@ class Metrics(FinanceMetrics, SalesMetrics, HubMetrics):
                 "expenses": ledger.data_start(),
                 "payments": _local_date(PaymentRecord.objects.filter(integration=self.integration).aggregate(m=Min("entry_date"))["m"]),
                 "leads": self.leads_start(),
+                "quotes": _local_date(Quote.objects.filter(integration=self.integration).aggregate(m=Min("transitioned_at"))["m"]),
             }
         return self._starts
 
@@ -647,6 +655,13 @@ class Metrics(FinanceMetrics, SalesMetrics, HubMetrics):
             return None
         return _d(self._lines(period).aggregate(s=Sum("total"))["s"])
 
+    def _revenue_target(self, period):
+        """Monthly target (Peter, Nov 10 2026): the same month last year + 20%, whole month, invoiced revenue."""
+        if period.kind != "month":
+            return None
+        last_year = self.value("invoiced_revenue", period.whole().shifted(months=-12))
+        return (last_year * TARGET_GROWTH).quantize(Decimal("0.01")) if last_year else None
+
     def _discounts(self, period):
         invoiced, net = self.value("invoiced_revenue", period), self.value("revenue", period)
         return None if invoiced is None else invoiced - net
@@ -718,15 +733,24 @@ class Metrics(FinanceMetrics, SalesMetrics, HubMetrics):
             return None
         return self._visits(period).filter(is_complete=True).count()
 
+    def _visits_planned(self, period):
+        """Every visit scheduled in the whole period (still to come included), cancelled ones left out."""
+        if not self._has("visits", period):
+            return None
+        return self._visits(period.whole()).filter(is_cancelled=False).count()
+
     def _completed_visit_value(self, period):
         if not self._has("visits", period):
             return None
-        completed = self._visits(period).filter(is_complete=True)
-        total = _d(completed.exclude(job__recurring_plan__pricing_source=PRICING_INVOICE).aggregate(s=Sum("price_per_visit"))["s"])
+        return self.visits_value(self._visits(period).filter(is_complete=True))
+
+    @staticmethod
+    def visits_value(visits) -> Decimal:
+        total = _d(visits.exclude(job__recurring_plan__pricing_source=PRICING_INVOICE).aggregate(s=Sum("price_per_visit"))["s"])
         # Accounts priced from invoices (e.g. Globe Electric: $4,880 on every visit, invoiced monthly):
         # each visit is worth its share of the monthly price, not the full line item.
         shares = (
-            completed.filter(job__recurring_plan__pricing_source=PRICING_INVOICE)
+            visits.filter(job__recurring_plan__pricing_source=PRICING_INVOICE)
             .values("job_id")
             .annotate(n=Count("id"))
             .values_list("n", "job__recurring_plan__monthly_value", "job__recurring_plan__manual_monthly_value", "job__recurring_plan__visits_per_month")

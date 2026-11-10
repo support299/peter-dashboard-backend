@@ -166,7 +166,7 @@ startAt
 endAt
 isComplete
 client { id }
-assignedUsers(first: 5) {
+assignedUsers(first: 50) {
   nodes { id }
 }
 """

@@ -179,9 +179,48 @@ def _visits_completed(metrics, period, **_):
     return _result("Completed visits", VISIT_COLUMNS, _visit_rows(qs), total_rows=qs.count())
 
 
+def _visits_planned(metrics, period, **_):
+    qs = metrics._visits(period.whole()).filter(is_cancelled=False)
+    return _result("Planned visits", VISIT_COLUMNS, _visit_rows(qs), total_rows=qs.count())
+
+
+def _visits_to_rebook(metrics, period, **_):
+    from insights.attention import REBOOK_DAYS, visits_to_rebook
+
+    qs, older = visits_to_rebook(metrics)
+    note = f"Past visits never completed, last {REBOOK_DAYS} days. {older} older ones aren't listed." if older else f"Past visits never completed, last {REBOOK_DAYS} days."
+    return _result("Visits to rebook", VISIT_COLUMNS, _visit_rows(qs), total_rows=qs.count(), note=note, kicker="As of today")
+
+
+def _revenue_expected(metrics, period, **_):
+    from insights.targets import expected_visits
+
+    qs = expected_visits(metrics)
+    return _result("Bookings still to invoice this month", VISIT_COLUMNS, _visit_rows(qs), total_rows=qs.count(), kicker="This month")
+
+
 def _touch_ups(metrics, period, **_):
     qs = metrics._visits(period).filter(is_touch_up=True, is_cancelled=False)
     return _result("Touch-up / redo visits", VISIT_COLUMNS, _visit_rows(qs), total_rows=qs.count())
+
+
+BOOKING_COLUMNS = [col("date", "Accepted", "date"), col("client", "Client"), col("quote", "Quote"), col("title", "Title"), col("amount", "Amount before tax", "currency")]
+
+
+def _bookings_won(metrics, period, **_):
+    rows = [
+        {
+            "id": q.id,
+            "date": _local(q.transitioned_at),
+            "client": _client_name(q.client),
+            "quote": f"#{q.quote_number}" if q.quote_number else "",
+            "title": q.title,
+            "amount": q.subtotal if q.subtotal is not None else q.total,
+            "link": q.jobber_web_uri,
+        }
+        for q in reversed(metrics.won_bookings(period))
+    ]
+    return _result("Bookings won", BOOKING_COLUMNS, rows, note="Accepted quotes that didn't become a recurring job.")
 
 
 # ——— clients ———
@@ -579,6 +618,12 @@ def _complaints_open(metrics, period, **_):
     return _result("Complaints not resolved yet", COMPLAINT_COLUMNS, _complaint_rows(qs))
 
 
+def _complaints_overdue(metrics, period, **_):
+    from insights.attention import overdue_complaints
+
+    return _result("Overdue complaints", COMPLAINT_COLUMNS, _complaint_rows(overdue_complaints(metrics)), note="Open for more than 1 business day, until marked resolved in the Hub.", kicker="As of today")
+
+
 def _complaints_resolved(metrics, period, **_):
     qs = metrics._hub_clients(HubComplaint.objects.filter(resolved_date__gte=period.start, resolved_date__lte=period.end))
     return _result("Complaints resolved", COMPLAINT_COLUMNS, _complaint_rows(qs))
@@ -667,6 +712,7 @@ HANDLERS = {
     "receivables_overdue": lambda m, p, **kw: _receivables(m, p, overdue=True),
     "top_clients": _top_clients,
     "visits_completed": _visits_completed,
+    "visits_planned": _visits_planned,
     "touch_ups": _touch_ups,
     "active_clients": _client_set("end", "Active clients at end of period"),
     "active_clients_start": _client_set("start", "Active clients at start of period"),
@@ -697,6 +743,10 @@ HANDLERS = {
     "google_new_reviews": _google_new,
     "complaints": _complaints,
     "complaints_open": _complaints_open,
+    "complaints_overdue": _complaints_overdue,
+    "visits_to_rebook": _visits_to_rebook,
+    "revenue_expected": _revenue_expected,
+    "bookings_won": _bookings_won,
     "complaints_resolved": _complaints_resolved,
     "labour_hours": _labour_hours,
     "late_arrivals": _late_arrivals,
@@ -714,6 +764,7 @@ LEAD_STAGE_FILTERS = {
     "leads_accepted": ("Prospects who accepted", lambda lead: not lead.existing_client and lead.accepted),
     "leads_won": ("Prospects who became clients", lambda lead: not lead.existing_client and lead.first_clean),
     "leads_recurring": ("Prospects who became recurring", lambda lead: not lead.existing_client and lead.recurring),
+    "leads_open": ("Open leads", lambda lead: not lead.existing_client and not lead.accepted and not lead.first_clean),
 }
 
 

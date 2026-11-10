@@ -28,6 +28,7 @@ LEAD_GAP_DAYS = 90  # contact again after this long = a new lead
 QUOTE_WINDOW_DAYS = 90  # a Jobber quote within this many days of the lead belongs to it
 CALC_ACCEPTED = {"approved"}
 QUOTE_ACCEPTED = {"approved", "converted"}
+BOOKING_MATCH_DAYS = 30  # a recurring job created within 30 days of acceptance came from the quote
 REQUEST_CONVERTED = {"converted"}
 
 SOURCE_LABELS = {
@@ -262,6 +263,62 @@ class SalesMetrics:
 
     def _leads_accepted(self, period):
         return self._funnel(period, "accepted")
+
+    def _open_leads(self, period):
+        """New prospects in the period who haven't accepted or had a first cleaning yet."""
+        if not self._leads_ok(period):
+            return None
+        return sum(1 for lead in self.prospects(period) if not lead.accepted and not lead.first_clean)
+
+    # ——— bookings won (Peter, Nov 10 2026: accepted quotes that are not recurring) ———
+    def won_bookings(self, period) -> list:
+        """
+        Quotes accepted in the period (approved or converted, dated by when they changed status),
+        except those that became a recurring job: the client's jobs created from the quote's creation
+        to BOOKING_MATCH_DAYS after acceptance are checked. No job yet = still counted.
+        """
+        from operations.models import Job
+
+        key = ("won_bookings", period.start, period.end, self.division)
+        if key in self._cache:
+            return self._cache[key]
+        quotes = list(
+            Quote.objects.filter(integration=self.integration, quote_status__in=QUOTE_ACCEPTED, transitioned_at__gte=period.start_dt, transitioned_at__lt=period.end_dt)
+            .exclude(client__is_internal=True)
+            .select_related("client")
+            .order_by("transitioned_at")
+        )
+        jobs = defaultdict(list)
+        for client_id, created, recurring in Job.objects.filter(integration=self.integration, client_id__in={q.client_id for q in quotes if q.client_id}).values_list(
+            "client_id", "source_created_at", "is_recurring"
+        ):
+            if created:
+                jobs[client_id].append((created, recurring))
+        won = []
+        for quote in quotes:
+            low = (quote.source_created_at or quote.transitioned_at) - timedelta(days=1)
+            high = quote.transitioned_at + timedelta(days=BOOKING_MATCH_DAYS)
+            if not any(recurring and low <= created <= high for created, recurring in jobs.get(quote.client_id, [])):
+                won.append(quote)
+        self._cache[key] = won
+        return won
+
+    def _bookings_ok(self, period):
+        from insights.metrics import jobber_sync_note
+
+        # Like leads: quotes can't be split by division reliably, so not shown for one division.
+        return self._has("quotes", period) and not self.division and not jobber_sync_note("quotes")
+
+    def _bookings_won(self, period):
+        return len(self.won_bookings(period)) if self._bookings_ok(period) else None
+
+    def _avg_booking_price(self, period):
+        """Average quote amount before tax (subtotal) of the bookings won, $0 quotes left out."""
+        if not self._bookings_ok(period):
+            return None
+        amounts = [q.subtotal if q.subtotal is not None else q.total for q in self.won_bookings(period)]
+        amounts = [a for a in amounts if a]  # $0 quotes (e.g. a free redo) would drag the average down
+        return (sum(amounts, Decimal(0)) / len(amounts)).quantize(Decimal("0.01")) if amounts else None
 
     def _leads_first_clean(self, period):
         return self._funnel(period, "first_clean")

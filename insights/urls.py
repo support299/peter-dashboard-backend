@@ -2,10 +2,14 @@ from django.urls import path
 
 from accounts.authz import protect
 from insights import manage_views as m
+from insights import manager_views as mv
 from insights.views import urlpatterns as dashboard_urls
 
 urlpatterns = [
     *dashboard_urls,
+    path("manager/", protect(mv.manager)),
+    path("manager/history/", protect(mv.manager_history)),
+    path("manager/capacity-check/", protect(mv.capacity_check, staff=True)),
     path("alerts/", protect(m.alerts)),
     path("alerts/<int:pk>/", protect(m.alert_detail, staff=True)),
     path("rules/", protect(m.rules, staff=True)),
