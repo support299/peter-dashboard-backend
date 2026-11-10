@@ -24,9 +24,11 @@ from insights.views import _cards, _context, _no_integration, _period_payload, e
 HUB_TIME_OFF = "https://hub.cleanonthego.com/admin/calendar"
 FORECAST_DAYS = 28  # the staffing view always looks four weeks ahead
 
-OVERVIEW = ["leads", "open_leads", "bookings_won", "avg_booking_price", "invoiced_revenue", "new_recurring_clients"]
-OVERVIEW_MORE = ["mrr_net_new", "mrr_new", "mrr_expansion", "mrr_contraction", "mrr_churned", "cancelled_recurring_clients"]
-SCHEDULING = ["visits_completed", "visits_planned", "cancelled_visits", "cancelled_recurring_jobs", "late_arrivals", "absence_days"]
+# Card groups follow Peter's mockup: six headline numbers, then Sales / Recurring revenue / Scheduling / Client experience.
+HEADLINE = ["leads", "bookings_won", "new_recurring_clients", "mrr_net_new", "visits_completed", "visits_planned", "invoiced_revenue"]
+SALES = ["avg_booking_price", "open_leads"]
+RECURRING = ["mrr_new", "mrr_expansion", "mrr_contraction", "mrr_churned", "cancelled_recurring_clients"]
+SCHEDULING = ["cancelled_visits", "cancelled_recurring_jobs", "late_arrivals", "absence_days"]
 CLIENT_EXPERIENCE = ["complaints", "touch_ups", "google_five_star_new", "feedback_score", "feedback_responses"]
 WAITING = ["Booked, available and bookable hours (4-week forecast)"]
 
@@ -107,8 +109,9 @@ def manager(request):
         {
             **_period_payload(period, comps),
             "last_completed_week": last_completed_week(today),
-            "overview": _cards(metrics, OVERVIEW, period, comps),
-            "overview_more": _cards(metrics, OVERVIEW_MORE, period, comps),
+            "headline": _cards(metrics, HEADLINE, period, comps),
+            "sales": _cards(metrics, SALES, period, comps),
+            "recurring": _cards(metrics, RECURRING, period, comps),
             "scheduling": _cards(metrics, SCHEDULING, period, comps),
             "client_experience": _cards(metrics, CLIENT_EXPERIENCE, period, comps),
             "staffing": staffing(),
@@ -145,8 +148,9 @@ def manager_history(request):
     return respond(
         {
             "grain": grain,
-            # Short labels so twelve fit under a small chart: "Nov 25" for months, "Nov 1" for weeks.
-            "labels": [f"{span.start:%b %y}" if grain == "month" else f"{span.start:%b} {span.start.day}" for span in spans],
+            # Short labels so twelve fit under a small chart ("Nov", or "Nov 1" for weeks); full names for the hover.
+            "labels": [f"{span.start:%b}" if grain == "month" else f"{span.start:%b} {span.start.day}" for span in spans],
+            "titles": [span.label for span in spans],
             "starts": [span.start for span in spans],
             "series": series,
         }
