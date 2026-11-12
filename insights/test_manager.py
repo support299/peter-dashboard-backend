@@ -179,6 +179,21 @@ class PeterAnswersTests(MasterDashboardDataMixin, TestCase):
         make("ancient", TODAY - timedelta(days=60))
         listed, older = visits_to_rebook(Metrics(self.integration))
         self.assertEqual((list(listed.values_list("external_id", flat=True)), older), (["sick"], 1))
+        # Each row opens the visit's job in Jobber, or the client when there's no job.
+        from insights.drill import drill
+
+        Visit.objects.filter(external_id="sick").update(job=self.alice_job)
+        Job.objects.filter(pk=self.alice_job.pk).update(jobber_web_uri="https://secure.getjobber.com/work_orders/1")
+        rows = drill(Metrics(self.integration), "visits_to_rebook", periods.build("month", TODAY))["rows"]
+        self.assertEqual(rows[0]["open"], "https://secure.getjobber.com/work_orders/1")
+        # Job without a link: the client's page. A non-https link is never used.
+        Job.objects.filter(pk=self.alice_job.pk).update(jobber_web_uri="")
+        Client.objects.filter(pk=self.alice.pk).update(jobber_web_uri="javascript:alert(1)")
+        rows = drill(Metrics(self.integration), "visits_to_rebook", periods.build("month", TODAY))["rows"]
+        self.assertEqual(rows[0]["open"], "")
+        Client.objects.filter(pk=self.alice.pk).update(jobber_web_uri="https://secure.getjobber.com/clients/9")
+        rows = drill(Metrics(self.integration), "visits_to_rebook", periods.build("month", TODAY))["rows"]
+        self.assertEqual(rows[0]["open"], "https://secure.getjobber.com/clients/9")
 
     def test_bookings_won_are_accepted_quotes_not_recurring(self):
         from insights.models import InsightsSetting

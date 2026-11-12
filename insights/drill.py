@@ -156,6 +156,11 @@ def _visit_value(visit):
     return visit.price_per_visit
 
 
+def _web_link(*urls) -> str:
+    """The first usable https link: anything else (empty, javascript:, …) is never shown as a button."""
+    return next((url for url in urls if isinstance(url, str) and url.startswith("https://")), "")
+
+
 def _visit_rows(qs):
     return [
         {
@@ -167,12 +172,15 @@ def _visit_rows(qs):
             "division": DIVISIONS.get(v.division, v.division or "—"),
             "team_leader": v.team_leader.full_name if v.team_leader else "",
             "amount": _visit_value(v),
+            # Jobber has no page per visit: the job's page lists its visits (reschedule from there).
+            "open": _web_link(v.job.jobber_web_uri if v.job_id else "", v.client.jobber_web_uri if v.client_id else ""),
+            "open_label": "Open in Jobber ↗",
         }
         for v in qs.select_related("client", "team_leader", "job__recurring_plan").order_by("-start_at")[:LIMIT]
     ]
 
 
-VISIT_COLUMNS = [col("date", "Date", "date"), col("client", "Client"), col("title", "Visit"), col("division", "Division"), col("team_leader", "Team leader"), col("amount", "Value", "currency")]
+VISIT_COLUMNS = [col("open", "", "link"), col("date", "Date", "date"), col("client", "Client"), col("title", "Visit"), col("division", "Division"), col("team_leader", "Team leader"), col("amount", "Value", "currency")]
 
 
 def _visits_completed(metrics, period, **_):
