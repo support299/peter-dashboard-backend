@@ -52,6 +52,7 @@ def _user_payload(user):
         "first_name": user.first_name,
         "last_name": user.last_name,
         "is_staff": bool(user.is_staff or user.is_superuser),
+        "is_superuser": bool(user.is_superuser),  # admins manage users
         "finance_role": finance_role(user),
         # None = every page; otherwise only these (e.g. ["master:manager"]).
         "pages": allowed_pages(user),

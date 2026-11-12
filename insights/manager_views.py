@@ -18,7 +18,6 @@ from analytics.hub_models import HubEmployee, HubLeaveRequest
 from insights import periods
 from insights.attention import REBOOK_DAYS, overdue_complaints, visits_to_rebook
 from insights.capacity import capacity_days, week_totals
-from insights.metrics import KPIS
 from insights.targets import month_forecast
 from insights.views import _cards, _context, _no_integration, _period_payload, error, respond
 
@@ -31,13 +30,6 @@ SALES = ["avg_booking_price", "open_leads"]
 RECURRING = ["mrr_new", "mrr_expansion", "mrr_contraction", "mrr_churned", "cancelled_recurring_clients"]
 SCHEDULING = ["cancelled_visits", "cancelled_recurring_jobs", "late_arrivals", "absence_days"]
 CLIENT_EXPERIENCE = ["complaints", "touch_ups", "google_five_star_new", "feedback_score", "feedback_responses"]
-# Lists someone limited to this page may open: the ones behind its numbers.
-MANAGER_DRILLS = {KPIS[key]["drill"] for key in HEADLINE + SALES + RECURRING + SCHEDULING + CLIENT_EXPERIENCE if KPIS[key]["drill"]} | {
-    "visits_to_rebook",
-    "first_visits_to_confirm",
-    "complaints_overdue",
-    "revenue_expected",
-}
 WAITING = ["Booked, available and bookable hours (4-week forecast)"]
 
 # History: (key, label, grains). Ending MRR only makes sense by month (it's a month-end figure).

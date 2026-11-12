@@ -17,6 +17,7 @@ from django.views.decorators.http import require_GET, require_http_methods
 
 from accounts.authz import protect
 from financials.access import can_see_finances
+from insights import page_kpis as pk
 from insights import periods
 from insights.drill import cancellation_row, drill, plan_row
 from insights.metrics import KPIS, SCORECARD, Metrics, what_changed
@@ -164,23 +165,13 @@ def revenue(request):
     return respond(
         {
             **_period_payload(period, comps),
-            "cards": _cards(
-                metrics,
-                ["revenue", "invoiced_revenue", "discounts", "completed_visit_value", "payments_received", "avg_revenue_per_visit"],
-                period,
-                comps,
-            ),
+            "cards": _cards(metrics, pk.REVENUE_CARDS, period, comps),
             "categories": _rows(metrics, "revenue_category", REVENUE_CATEGORY_CHOICES, period, comps),
             "divisions": _rows(metrics, "division", DIVISION_CHOICES, period, comps),
-            "profitability": _cards(
-                metrics,
-                ["cogs", "cogs_pct", "gross_profit", "gross_margin", "operating_expenses", "opex_pct", "vehicle_expenses", "operating_profit", "net_profit", "net_margin", "payroll", "payroll_pct"],
-                period,
-                comps,
-            ),
-            "concentration": _cards(metrics, ["top5_share", "top10_share"], period, comps),
-            "receivables": _cards(metrics, ["ar_balance", "ar_overdue"], period, comps),
-            "collections": _cards(metrics, ["payments_received", "days_to_payment"], period, comps),
+            "profitability": _cards(metrics, pk.REVENUE_PROFITABILITY, period, comps),
+            "concentration": _cards(metrics, pk.REVENUE_CONCENTRATION, period, comps),
+            "receivables": _cards(metrics, pk.REVENUE_RECEIVABLES, period, comps),
+            "collections": _cards(metrics, pk.REVENUE_COLLECTIONS, period, comps),
             "top_clients": metrics.top_clients(period, 10),
         }
     )
@@ -194,26 +185,9 @@ def clients(request):
     return respond(
         {
             **_period_payload(period, comps),
-            "growth": _cards(
-                metrics,
-                ["active_clients_start", "gained_clients", "lost_clients", "active_clients", "new_clients", "returning_clients", "net_client_growth"],
-                period,
-                comps,
-            ),
-            "recurring": _cards(
-                metrics,
-                [
-                    "active_recurring_clients",
-                    "paused_clients",
-                    "recurring_retention",
-                    "new_recurring_jobs",
-                    "cancelled_recurring_jobs",
-                    "net_recurring_jobs",
-                ],
-                period,
-                comps,
-            ),
-            "sales": _cards(metrics, ["leads", "new_prospects", "lead_conversion", "days_to_first_clean", "avg_new_client_value"], period, comps),
+            "growth": _cards(metrics, pk.CLIENTS_GROWTH, period, comps),
+            "recurring": _cards(metrics, pk.CLIENTS_RECURRING, period, comps),
+            "sales": _cards(metrics, pk.CLIENTS_SALES, period, comps),
         }
     )
 
@@ -242,25 +216,7 @@ def mrr(request):
     return respond(
         {
             **_period_payload(period, comps),
-            "cards": _cards(
-                metrics,
-                [
-                    "mrr_starting",
-                    "mrr_new",
-                    "mrr_expansion",
-                    "mrr_reactivated",
-                    "mrr_contraction",
-                    "mrr_churned",
-                    "mrr_paused_net",
-                    "mrr_net_new",
-                    "mrr",
-                    "mrr_paused",
-                    "active_recurring_clients",
-                    "paused_clients",
-                ],
-                period,
-                comps,
-            ),
+            "cards": _cards(metrics, pk.MRR_CARDS, period, comps),
             "waterfall": steps,
             "tracking_start": tracking_start(),
             "expansion_tracked_from": result.expansion_tracked_from if result.available else None,
@@ -396,19 +352,7 @@ def cancellations(request):
         {
             **_period_payload(period, comps),
             "data_start": metrics.data_starts().get("cancellations"),
-            "cards": _cards(
-                metrics,
-                [
-                    "cancelled_visits",
-                    "cancelled_visits_value",
-                    "cancellations_internal",
-                    "cancelled_jobs",
-                    "cancelled_jobs_value",
-                    "service_cancellation_forms",
-                ],
-                period,
-                comps,
-            ),
+            "cards": _cards(metrics, pk.CANCELLATION_CARDS, period, comps),
             "service_reasons": metrics.service_cancellation_reasons(period),
             "reasons": reasons,
             "groups": [groups[key] for key in ("customer", "internal", "external", "other", "") if key in groups],
@@ -445,12 +389,10 @@ def quality(request):
     return respond(
         {
             **_period_payload(period, comps),
-            "redos": _cards(metrics, ["touch_ups", "touch_up_rate", "touch_up_hours", "touch_up_cost"], period, comps),
-            "feedback": _cards(metrics, ["feedback_score", "feedback_responses", "feedback_participation"], period, comps),
-            "complaints": _cards(
-                metrics, ["complaints", "complaint_rate", "complaints_open", "complaint_resolution_days"], period, comps
-            ),
-            "google": _cards(metrics, ["google_rating", "google_reviews", "google_new_reviews", "google_five_star_new"], period, comps),
+            "redos": _cards(metrics, pk.QUALITY_REDOS, period, comps),
+            "feedback": _cards(metrics, pk.QUALITY_FEEDBACK, period, comps),
+            "complaints": _cards(metrics, pk.QUALITY_COMPLAINTS, period, comps),
+            "google": _cards(metrics, pk.QUALITY_GOOGLE, period, comps),
             "complaint_types": metrics.complaint_types(period) if metrics._has("complaints", period) else [],
             "people": metrics.employee_table(period),
             "team_leaders": team_leader_table(metrics, period),
@@ -467,14 +409,9 @@ def operations(request):
         {
             **_period_payload(period, comps),
             "data_start": metrics.data_starts().get("hours"),
-            "work": _cards(
-                metrics,
-                ["visits_completed", "labour_hours", "revenue_per_labour_hour", "overtime_hours", "drive_time_hours", "drive_time_cost"],
-                period,
-                comps,
-            ),
-            "people": _cards(metrics, ["absence_days", "late_arrivals", "cancellations_internal"], period, comps),
-            "payroll": _cards(metrics, ["payroll", "payroll_pct"], period, comps),
+            "work": _cards(metrics, pk.OPERATIONS_WORK, period, comps),
+            "people": _cards(metrics, pk.OPERATIONS_PEOPLE, period, comps),
+            "payroll": _cards(metrics, pk.OPERATIONS_PAYROLL, period, comps),
             "employees": metrics.employee_table(period),
             "team_leaders": team_leader_table(metrics, period),
         }
@@ -493,10 +430,10 @@ def sales(request):
             **_period_payload(period, comps),
             "data_start": metrics.data_starts().get("leads"),
             "division_note": metrics.division and "Leads aren't split by division, so this page shows the whole company.",
-            "funnel": _cards(metrics, ["leads", "new_prospects", "leads_quoted", "leads_accepted", "leads_first_clean", "leads_recurring"], period, comps),
-            "quotes": _cards(metrics, ["calculator_estimates", "jobber_quotes"], period, comps),
-            "rates": _cards(metrics, ["lead_conversion", "days_to_first_clean"], period, comps),
-            "marketing": _cards(metrics, ["marketing_spend", "cost_per_lead", "cost_per_new_client", "new_clients"], period, comps),
+            "funnel": _cards(metrics, pk.SALES_FUNNEL, period, comps),
+            "quotes": _cards(metrics, pk.SALES_QUOTES, period, comps),
+            "rates": _cards(metrics, pk.SALES_RATES, period, comps),
+            "marketing": _cards(metrics, pk.SALES_MARKETING, period, comps),
             "sources": metrics.lead_sources(period) if not metrics.division else [],
             "sync_notes": [note for note in (jobber_sync_note("requests"), jobber_sync_note("quotes")) if note],
         }
@@ -514,6 +451,12 @@ def trend(request):
     grain = request.GET.get("grain") if request.GET.get("grain") in ("month", "quarter", "year") else None
     range_key = request.GET.get("range") if request.GET.get("range") in ("12m", "3y", "5y", "lifetime", "custom") else "12m"
     keys = [k for k in (request.GET.get("metrics") or request.GET.get("metric") or "revenue").split(",") if k in KPIS][:4]
+    # Someone limited to some pages only gets trends of numbers shown on those pages.
+    from accounts.access import allowed_kpis
+
+    allowed = allowed_kpis(request.user)
+    if allowed is not None:
+        keys = [k for k in keys if k in allowed]
     return respond(
         {
             "series": [
@@ -525,14 +468,11 @@ def trend(request):
 
 
 def drill_allowed(user, key: str) -> bool:
-    from accounts.access import allowed_pages
+    """Someone limited to some pages only opens the lists behind the numbers on those pages."""
+    from accounts.access import allowed_drills
 
-    pages = allowed_pages(user)
-    if pages is None:
-        return True
-    from insights.manager_views import MANAGER_DRILLS
-
-    return "master:manager" in pages and key in MANAGER_DRILLS
+    drills = allowed_drills(user)
+    return drills is None or key in drills
 
 
 @require_GET
