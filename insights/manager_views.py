@@ -17,7 +17,7 @@ from django.views.decorators.http import require_GET
 from analytics.hub_models import HubEmployee, HubLeaveRequest
 from insights import periods
 from insights.attention import REBOOK_DAYS, overdue_complaints, visits_to_rebook
-from insights.capacity import capacity_days, week_totals
+from insights.capacity import capacity_days, forecast, week_totals
 from insights.targets import month_forecast
 from insights.views import _cards, _context, _no_integration, _period_payload, error, respond
 
@@ -30,7 +30,7 @@ SALES = ["avg_booking_price", "open_leads"]
 RECURRING = ["mrr_new", "mrr_expansion", "mrr_contraction", "mrr_churned", "cancelled_recurring_clients"]
 SCHEDULING = ["cancelled_visits", "cancelled_recurring_jobs", "late_arrivals", "absence_days"]
 CLIENT_EXPERIENCE = ["complaints", "touch_ups", "google_five_star_new", "feedback_score", "feedback_responses"]
-WAITING = ["Booked, available and bookable hours (4-week forecast)"]
+WAITING = []
 
 # History: (key, label, grains). Ending MRR only makes sense by month (it's a month-end figure).
 HISTORY = [
@@ -121,6 +121,8 @@ def manager(request):
             "staffing": staffing(),
             "attention": attention(metrics),
             "target": month_forecast(metrics),
+            # Always the next 4 weeks from today, whatever period the business overview shows.
+            "capacity": forecast(metrics.integration, timezone.localdate(), metrics.division),
             "waiting_for_peter": WAITING,
         }
     )

@@ -208,6 +208,91 @@ def _revenue_expected(metrics, period, **_):
     return _result("Bookings still to invoice this month", VISIT_COLUMNS, _visit_rows(qs), total_rows=qs.count(), kicker="This month")
 
 
+CAPACITY_COLUMNS = [
+    col("open", "", "link"),
+    col("time", "Time"),
+    col("client", "Client"),
+    col("title", "Visit"),
+    col("hours", "Hours (from instructions)"),
+    col("check", "Check"),
+    col("team_leader", "Team leader"),
+]
+def _clock(moment) -> str:
+    """9:30 AM (works on every OS, unlike strftime's %-I)."""
+    return f"{moment.hour % 12 or 12}:{moment:%M} {'AM' if moment.hour < 12 else 'PM'}"
+
+
+HOURS_STATUS = {"ok": "", "range": "Range: higher number used", "missing": "No hours written", "unclear": "Several different numbers"}
+
+
+def _capacity_rows(qs):
+    from insights.capacity import parse_hours
+
+    rows = []
+    for v in qs.select_related("client", "team_leader", "job").order_by("start_at"):
+        hours, status = parse_hours(v.instructions)
+        start = timezone.localtime(v.start_at)
+        end = timezone.localtime(v.end_at) if v.end_at else None
+        rows.append(
+            {
+                "id": v.id,
+                "date": start.date(),
+                "time": _clock(start) + (f" – {_clock(end)}" if end else ""),
+                "client": _client_name(v.client),
+                "title": v.title,
+                "hours": f"{hours:g} h" if hours is not None else "—",
+                "check": HOURS_STATUS.get(status, status),
+                "team_leader": v.team_leader.full_name if v.team_leader else "",
+                "open": _web_link(v.job.jobber_web_uri if v.job_id else "", v.client.jobber_web_uri if v.client_id else ""),
+                "open_label": "Open in Jobber ↗",
+            }
+        )
+    return rows
+
+
+def _capacity_visits(metrics, start, end):
+    qs = Visit.objects.filter(integration=metrics.integration, start_at__gte=aware(start), start_at__lt=aware(end + timedelta(days=1)), is_cancelled=False).exclude(
+        client__is_internal=True
+    )
+    return qs.filter(division=metrics.division) if metrics.division else qs
+
+
+def _capacity_day(metrics, period, category="", **_):
+    """One day of the forecast: the cleaners on the Available Cleaners task and the visits (time slots) behind the number."""
+    from datetime import date as _date
+
+    from analytics.hub_models import HubLeaveRequest
+    from insights.capacity import _adjust_for_leave, capacity_days
+
+    try:
+        day = _date.fromisoformat(category)
+    except ValueError:
+        return _result("Day not found", [], [], note="Pick a day in the capacity view.")
+    row = capacity_days(metrics.integration, day, day, metrics.division)[0]
+    leave = list(HubLeaveRequest.objects.filter(status__in=["approved", "pending"], start_date__lte=day, end_date__gte=day))
+    _adjust_for_leave(row, [r for r in leave if r.status == "approved"], [r for r in leave if r.status == "pending"])
+    people = ", ".join(row["cleaners"]) or "no Available Cleaners task for this day"
+    note = f"Available cleaners: {people}."
+    if row["on_leave"]:
+        note += f" Off (approved time off): {', '.join(row['on_leave'])}."
+    if row["pending_leave"]:
+        note += f" Time off waiting for approval: {', '.join(row['pending_leave'])}."
+    if row["task_notes"]:
+        note += f" Task notes (not counted): {row['task_notes']}"
+    return _result(f"{day:%A, %B} {day.day}", CAPACITY_COLUMNS, _capacity_rows(_capacity_visits(metrics, day, day)), note=note, kicker="Capacity")
+
+
+def _capacity_review(metrics, period, **_):
+    """Visits in the next 4 weeks whose hours are missing, a range or unclear."""
+    from insights.capacity import FORECAST_WEEKS, parse_hours
+
+    today = timezone.localdate()
+    end = today - timedelta(days=(today.weekday() + 1) % 7) + timedelta(days=7 * FORECAST_WEEKS - 1)
+    rows = [r for r in _capacity_rows(_capacity_visits(metrics, today, end)) if r["check"]]
+    columns = [col("date", "Date", "date"), *CAPACITY_COLUMNS]
+    return _result("Visits to check: hours", columns, rows, note="Write the cleaner-hours in the visit's instructions in Jobber (e.g. “5h job”). Ranges count the higher number.", kicker="Next 4 weeks")
+
+
 def _touch_ups(metrics, period, **_):
     qs = metrics._visits(period).filter(is_touch_up=True, is_cancelled=False)
     return _result("Touch-up / redo visits", VISIT_COLUMNS, _visit_rows(qs), total_rows=qs.count())
@@ -774,6 +859,8 @@ HANDLERS = {
     "visits_to_rebook": _visits_to_rebook,
     "revenue_expected": _revenue_expected,
     "bookings_won": _bookings_won,
+    "capacity_day": _capacity_day,
+    "capacity_review": _capacity_review,
     "first_visits_to_confirm": _first_visits_to_confirm,
     "complaints_resolved": _complaints_resolved,
     "labour_hours": _labour_hours,

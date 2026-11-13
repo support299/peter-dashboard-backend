@@ -254,6 +254,10 @@ class JobberSyncService:
                 created_after=(timezone.now() - timedelta(days=45)).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 cancellation_only=True,
             )
+            try:
+                self._refresh_capacity_tasks()
+            except Exception:  # the forecast can wait a night; the sync must finish
+                logger.exception("Refreshing Available Cleaners tasks failed")
             self._backfill_visit_flags()
             self._refresh_client_averages()
             seed_taxonomy_defaults()
@@ -879,6 +883,40 @@ class JobberSyncService:
             logger.warning("Task sync failed (%s); continuing without tasks.", exc)
         self._record("tasks", count)
         self._record("cancellation_tasks", cancel_count)
+
+    CAPACITY_REFRESH_DAYS = 35
+
+    def _refresh_capacity_tasks(self):
+        """
+        Re-read the coming weeks' "Available Cleaners" tasks one by one. The nightly task pull only sees
+        tasks created in the last 45 days, and the office creates these weeks or months ahead: without
+        this, a later change to who's available, or a deleted task, would never reach the forecast.
+        Never fails the sync.
+        """
+        from insights.capacity import is_capacity_task
+        from integrations.queries import node_query
+
+        if not self._has_root("task"):
+            return
+        now = timezone.now()
+        upcoming = JobberTask.objects.filter(integration=self.integration, due_at__gte=now - timedelta(days=1), due_at__lt=now + timedelta(days=self.CAPACITY_REFRESH_DAYS))
+        refreshed = removed = 0
+        for task in upcoming:
+            if not is_capacity_task(task.title):
+                continue
+            try:
+                data = self.client.execute(node_query("task", TASKS_SELECTION), {"id": task.external_id})
+            except JobberAPIError as exc:
+                logger.warning("Couldn't refresh Available Cleaners task %s: %s", task.external_id, exc)
+                continue
+            if "task" in (data or {}) and data["task"] is None:
+                task.delete()  # Jobber no longer has it
+                removed += 1
+            elif (data or {}).get("task"):
+                self._upsert_task(data["task"])
+                refreshed += 1
+        self._record("capacity_tasks_refreshed", refreshed)
+        self._record("capacity_tasks_removed", removed)
 
     def _upsert_task(self, node: dict) -> JobberTask | None:
         if not node or not node.get("id"):

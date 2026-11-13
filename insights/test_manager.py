@@ -46,8 +46,13 @@ class HoursTests(SimpleTestCase):
         self.assertFalse(is_capacity_task("Jasmine (Absence)"))
         by_title = JobberTask(title="Available Cleaners: Vicky ATL, Leanna TL, Rose, vicky", source_payload={})
         self.assertEqual(task_cleaners(by_title), (["Vicky", "Leanna", "Rose"], "title"))
-        assigned = JobberTask(title="Available Cleaners: Vicky", source_payload={"assignedUsers": {"nodes": [{"id": "U2"}, {"id": "U1"}, {"id": "U2"}]}})
-        self.assertEqual(task_cleaners(assigned), (["U1", "U2"], "assigned"))  # exact people beat names
+        # The office assigns the same few people to every task: the names in the title are the day's crew.
+        both = JobberTask(title="Available Cleaners: Vicky, Rose, Jaya", source_payload={"assignedUsers": {"nodes": [{"id": "U2"}, {"id": "U1"}]}})
+        self.assertEqual(task_cleaners(both), (["Vicky", "Rose", "Jaya"], "title"))
+        labelled = JobberTask(title="Available Cleaners: Vicky ATL, Kim (Contractor), Lou (contractor), kim", source_payload={})
+        self.assertEqual(task_cleaners(labelled), (["Vicky", "Kim", "Lou"], "title"))  # labels dropped, counted once
+        no_names = JobberTask(title="Available Cleaners",source_payload={"assignedUsers": {"nodes": [{"id": "U2"}, {"id": "U1"}, {"id": "U2"}]}})
+        self.assertEqual(task_cleaners(no_names), (["U1", "U2"], "assigned"))  # only when the title has no names
 
 
 class CapacityTests(MasterDashboardDataMixin, TestCase):
@@ -323,3 +328,124 @@ class ManagerOnlyAccessTests(MasterDashboardDataMixin, TestCase):
         self.client.force_login(other)
         self.assertIsNone(self.client.get("/api/accounts/me/").json()["user"]["pages"])
         self.assertEqual(self.client.get("/api/insights/overview/").status_code, 200)
+
+
+class ForecastTests(MasterDashboardDataMixin, TestCase):
+    """The 4-week capacity view (Peter, Nov 2026)."""
+
+    def task(self, day, names, ext=None):
+        JobberTask.objects.create(integration=self.integration, external_id=ext or f"t-{day}", title=f"Available Cleaners: {names}", due_at=at(day, 7))
+
+    def visit(self, day, text, ext):
+        Visit.objects.create(integration=self.integration, external_id=ext, client=self.alice, start_at=at(day, 9), instructions=text)
+
+    def test_leave_weeks_gap_and_review_staffing(self):
+        from insights.capacity import forecast
+
+        monday, tuesday = date(2026, 11, 16), date(2026, 11, 17)
+        self.task(monday, "Vicky ATL, Rose, Jaya")  # 3 × 6.5 = 19.5 h
+        self.task(tuesday, "Vicky ATL, Rose, Jaya")
+        self.visit(monday, "10h job", "m1")
+        self.visit(tuesday, "15h job", "t1")
+        HubLeaveRequest.objects.create(external_id="l1", employee_name="Rose Fong", status="approved", start_date=monday, end_date=monday)
+        HubLeaveRequest.objects.create(external_id="l2", employee_name="Jaya", status="pending", start_date=tuesday, end_date=tuesday)
+        HubLeaveRequest.objects.create(external_id="l3", employee_name="Someone Else", status="approved", start_date=monday, end_date=tuesday)  # not on the task
+        result = forecast(self.integration, monday)
+        self.assertEqual((len(result["weeks"]), result["weeks"][0]["start"], result["from"]), (4, date(2026, 11, 15), monday))
+        days = {d["date"]: d for d in result["weeks"][0]["days"]}
+        mon, tue = days[monday], days[tuesday]
+        # Approved leave: Rose is off Monday's task -> 2 cleaners = 13 h, 10 booked -> 3 bookable
+        self.assertEqual((mon["on_leave"], mon["available"], mon["bookable"], mon["shortfall"], mon["per_cleaner"]), (["Rose"], D(13), D(3), D(0), D("5.0")))
+        # Pending leave: shown separately, the forecast itself keeps Jaya
+        self.assertEqual((tue["available"], tue["shortfall"], tue["pending_leave"]), (D("19.5"), D(0), ["Jaya"]))
+        self.assertEqual(tue["if_approved"], {"available": D(13), "bookable": D(0), "shortfall": D(2)})
+        totals = result["weeks"][0]["totals"]
+        self.assertEqual((totals["bookable"], totals["shortfall"], totals["if_approved"]), (D("7.5"), D(0), {"bookable": D(3), "shortfall": D(2)}))
+        self.assertIsNone(result["next_gap"])  # only a gap if approved
+        self.assertFalse(result["review_staffing"])
+
+    def test_review_staffing_after_three_short_weeks(self):
+        from insights.capacity import forecast
+
+        for week in range(3):
+            day = date(2026, 11, 16) + timedelta(days=7 * week)
+            self.task(day, "Vicky")
+            self.visit(day, "9h job", f"s{week}")
+        result = forecast(self.integration, date(2026, 11, 16))
+        self.assertTrue(result["review_staffing"])
+        self.assertEqual((result["next_gap"], result["gap_days"]), ({"date": date(2026, 11, 16), "hours": D("2.5")}, 3))
+
+    def test_day_and_review_lists(self):
+        from insights.drill import drill
+
+        monday = date(2026, 11, 16)
+        self.task(monday, "Vicky, Rose")
+        self.visit(monday, "4h job", "d1")
+        self.visit(monday, "no hours here", "d2")
+        metrics = Metrics(self.integration)
+        day = drill(metrics, "capacity_day", periods.build("month", monday), category="2026-11-16")
+        self.assertIn("Vicky, Rose", day["note"])
+        HubLeaveRequest.objects.create(external_id="dl1", employee_name="Rose", status="approved", start_date=monday, end_date=monday)
+        day = drill(metrics, "capacity_day", periods.build("month", monday), category="2026-11-16")
+        self.assertIn("Available cleaners: Vicky.", day["note"])
+        self.assertIn("Off (approved time off): Rose.", day["note"])
+        self.assertEqual(sorted(r["hours"] for r in day["rows"]), ["4 h", "—"])
+        self.assertTrue(all(r["time"].endswith(("AM", "PM")) for r in day["rows"]))
+        with mock.patch("django.utils.timezone.localdate", return_value=monday):
+            review = drill(metrics, "capacity_review", periods.build("month", monday))
+        # Every listed visit has a reason; the one with clear hours ("4h job") isn't listed.
+        self.assertTrue(review["rows"] and all(r["check"] for r in review["rows"]))
+        self.assertNotIn("4 h", [r["hours"] for r in review["rows"]])
+        self.assertIn("No hours written", [r["check"] for r in review["rows"]])
+        self.assertEqual(drill(metrics, "capacity_day", periods.build("month", monday), category="nope")["rows"], [])
+
+
+class CapacityTaskRefreshTests(MasterDashboardDataMixin, TestCase):
+    """The nightly refresh keeps the coming weeks' Available Cleaners tasks current."""
+
+    def test_edited_deleted_and_failed(self):
+        from integrations.client import JobberAPIError
+        from integrations.sync import JobberSyncService
+
+        soon = timezone.now() + timedelta(days=3)
+        edited = JobberTask.objects.create(integration=self.integration, external_id="t-edit", title="Available Cleaners: Vicky", due_at=soon)
+        gone = JobberTask.objects.create(integration=self.integration, external_id="t-gone", title="Available Cleaners: Rose", due_at=soon)
+        broken = JobberTask.objects.create(integration=self.integration, external_id="t-err", title="Available Cleaners: Jaya", due_at=soon)
+        other = JobberTask.objects.create(integration=self.integration, external_id="t-other", title="Buy supplies", due_at=soon)
+        later = JobberTask.objects.create(integration=self.integration, external_id="t-later", title="Available Cleaners: Lou", due_at=soon + timedelta(days=60))
+
+        def execute(query, variables):
+            task_id = variables["id"]
+            if task_id == "t-edit":
+                return {"task": {"id": "t-edit", "title": "Available Cleaners: Vicky, Mia", "startAt": soon.isoformat()}}
+            if task_id == "t-gone":
+                return {"task": None}
+            raise JobberAPIError("temporary")
+
+        sync = JobberSyncService.__new__(JobberSyncService)
+        sync.integration, sync.counts, sync.sync_run, sync.query_fields = self.integration, {}, None, set()
+        sync._employee_cache, sync._client_cache, sync._job_cache = {}, {}, {}
+        sync.client = mock.Mock(execute=mock.Mock(side_effect=execute))
+        sync._record = lambda name, count: sync.counts.__setitem__(name, count)
+        sync._refresh_capacity_tasks()
+        self.assertEqual(JobberTask.objects.get(pk=edited.pk).title, "Available Cleaners: Vicky, Mia")
+        self.assertFalse(JobberTask.objects.filter(pk=gone.pk).exists())
+        self.assertTrue(JobberTask.objects.filter(pk=broken.pk).exists())  # a Jobber error never deletes
+        asked = {call.args[1]["id"] for call in sync.client.execute.call_args_list}
+        self.assertEqual(asked, {"t-edit", "t-gone", "t-err"})  # not other tasks, not beyond 5 weeks
+        self.assertEqual((sync.counts["capacity_tasks_refreshed"], sync.counts["capacity_tasks_removed"]), (1, 1))
+        self.assertTrue(JobberTask.objects.filter(pk__in=[other.pk, later.pk]).count() == 2)
+
+
+class LeaveMatchingTests(SimpleTestCase):
+    def test_names_match_both_ways(self):
+        from types import SimpleNamespace
+
+        from insights.capacity import _on_leave
+
+        hub = lambda name: SimpleNamespace(employee_name=name)  # noqa: E731
+        self.assertEqual(_on_leave(["Rose", "Jaime Montoya", "Kim"], [hub("Rose Fong")]), ["Rose"])
+        self.assertEqual(_on_leave(["Rose", "Jaime Montoya", "Kim"], [hub("Jaime")]), ["Jaime Montoya"])
+        self.assertEqual(_on_leave(["Jaime Montoya"], [hub("jaime  montoya")]), ["Jaime Montoya"])
+        self.assertEqual(_on_leave(["Jaime Montoya"], [hub("Jaime Lopez")]), [])  # two different full names
+        self.assertEqual(_on_leave(["Rose"], [hub("")]), [])

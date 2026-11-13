@@ -90,7 +90,7 @@ EXTRA_DRILLS = {
     "master:revenue": {"revenue"},
     "master:mrr": set(MRR_WATERFALL),
     "master:cancellations": {"service_cancellations"},
-    "master:manager": {"visits_to_rebook", "first_visits_to_confirm", "complaints_overdue", "revenue_expected"},
+    "master:manager": {"visits_to_rebook", "first_visits_to_confirm", "complaints_overdue", "revenue_expected", "capacity_day", "capacity_review"},
 }
 
 
