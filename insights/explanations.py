@@ -97,7 +97,7 @@ HOW = {
     "drive_time_hours": "Drive time sent by the Hub from Jobber timesheets. For cleaners, General time is drive time; for team leaders it's work time. Zero until the Hub sends it.",
     "drive_time_cost": "Drive hours × each person's drive-time rate in the Hub, or $18/hour without one. Cleaners only (Cleaning Technician, Cleaning Specialist, Specialty Cleaner): contractors, team leaders, managers and office staff are left out.",
     "revenue_per_labour_hour": "Revenue ÷ labour hours. Only shown when hours cover the whole period.",
-    "absence_days": "Weekdays covered by Hub leave requests of type Absent (rejected requests excluded).",
+    "absence_days": "People-days missed: sick or absent entries on the Hub's New Absence form, plus weekdays of Absent time-off requests that weren't rejected. The same person on the same day counts once.",
     "late_arrivals": "Late arrivals logged on the Hub's New Absence form (type Late), counted on the late date.",
     # Concentration & receivables
     "top5_share": "Revenue from the 5 biggest clients in the period ÷ total revenue.",

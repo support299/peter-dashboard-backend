@@ -43,7 +43,8 @@ HISTORY = [
     ("cancelled_recurring_clients", "Recurring clients lost", ("month", "week")),
     ("complaint_rate", "Complaints per 100 visits", ("month", "week")),
     ("touch_up_rate", "Touch-ups per 100 visits", ("month", "week")),
-    ("cancelled_visits", "Cancelled visits", ("month", "week")),
+    # Schedule reliability = absences + late arrivals (Peter, Nov 16 2026: absences instead of cancelled visits).
+    ("absence_days", "Absence days", ("month", "week")),
     ("late_arrivals", "Late arrivals", ("month", "week")),
     ("feedback_score", "Client feedback (out of 5)", ("month", "week")),
     ("feedback_responses", "Feedback responses", ("month", "week")),

@@ -779,14 +779,22 @@ def _late_arrivals(metrics, period, **_):
 
 
 def _absences(metrics, period, **_):
-    rows = [
-        {"employee": a.employee_name, "start": a.start_date, "end": a.end_date, "days": a.weekday_count, "status": a.status}
-        for a in metrics.absences(period).order_by("-start_date")
-    ]
+    """One row per person per day, the way Absence days counts them."""
+    from analytics.hub_models import HubAbsence
+
+    rows = []
+    for (_, day), source in metrics.absence_person_days(period).items():
+        if isinstance(source, HubAbsence):
+            kind, how, note = source.type_label or source.type.capitalize(), "New Absence form", source.comment
+        else:
+            kind, how, note = "Absent", "Time-off request", (source.status or "").capitalize()
+        rows.append({"date": day, "employee": source.employee_name, "type": kind, "how": how, "note": note})
+    rows.sort(key=lambda row: (row["date"], row["employee"]), reverse=True)
     return _result(
         "Absences",
-        [col("employee", "Employee"), col("start", "From", "date"), col("end", "To", "date"), col("days", "Weekdays", "count"), col("status", "Status")],
+        [col("date", "Date", "date"), col("employee", "Employee"), col("type", "Type"), col("how", "Reported through"), col("note", "Comment")],
         rows,
+        note="Sick and absent entries from the Hub's New Absence form, plus Absent time-off requests that weren't rejected (weekdays). The same person on the same day counts once.",
     )
 
 

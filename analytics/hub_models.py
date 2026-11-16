@@ -300,6 +300,36 @@ class HubServiceCancellation(models.Model):
         ordering = ["-submitted_at", "-id"]
 
 
+class HubAbsence(models.Model):
+    """
+    One employee's entry on the Hub's New Absence form (export section absence_log, Nov 2026):
+    type late, sick or absent (anything not late or sick is absent). Late ones also arrive in
+    late_arrivals; absences count sick and absent only.
+    """
+
+    TYPE_LATE, TYPE_SICK, TYPE_ABSENT = "late", "sick", "absent"
+    MISSED = (TYPE_SICK, TYPE_ABSENT)
+
+    external_id = models.CharField(max_length=120, unique=True, db_index=True)
+    submission_id = models.CharField(max_length=120, blank=True, default="")
+    date = models.DateField(db_index=True)
+    type = models.CharField(max_length=16, blank=True, default="", db_index=True)
+    type_label = models.CharField(max_length=120, blank=True, default="")
+    employee_external_id = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    employee_name = models.CharField(max_length=255, blank=True, default="")
+    jobber_user_id = models.CharField(max_length=160, blank=True, default="", db_index=True)
+    comment = models.TextField(blank=True, default="")
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    source_payload = models.JSONField(default=dict, blank=True)
+    synced_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-date", "employee_name"]
+
+    def __str__(self):
+        return f"{self.employee_name} {self.date} {self.type}"
+
+
 class HubLateArrival(models.Model):
     """One employee's late arrival, from the Hub's New Absence form (type Late)."""
 

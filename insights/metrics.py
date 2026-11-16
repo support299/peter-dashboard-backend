@@ -15,7 +15,7 @@ from decimal import Decimal
 from django.db.models import Avg, Count, Min, Q, Sum
 from django.utils import timezone
 
-from analytics.hub_models import HubComplaint, HubEmployee, HubLateArrival, HubLeaveRequest, HubReview, HubServiceCancellation, HubWorkHours
+from analytics.hub_models import HubAbsence, HubComplaint, HubEmployee, HubLateArrival, HubLeaveRequest, HubReview, HubServiceCancellation, HubWorkHours
 from analytics.parsing import parse_decimal
 from financials import ledger
 from financials.metrics import FinanceMetrics
@@ -151,7 +151,7 @@ KPIS = {
     "drive_time_hours": kpi("Drive time hours", kind="decimal", better="down", drill="labour_hours", source="hours"),
     "drive_time_cost": kpi("Drive time cost", better="down", drill="labour_hours", source="hours"),
     "revenue_per_labour_hour": kpi("Revenue per labour hour", source="hours"),
-    "absence_days": kpi("Absence days", kind="count", better="down", drill="absences"),
+    "absence_days": kpi("Absence days", kind="count", better="down", drill="absences", source="absences"),
     "late_arrivals": kpi("Late arrivals", kind="count", better="down", drill="late_arrivals", source="late_arrivals"),
     "service_cancellation_forms": kpi("Service cancellation forms", kind="count", better="down", drill="service_cancellations", source="service_cancellations"),
     # Concentration & receivables
@@ -456,11 +456,35 @@ class HubMetrics:
             .exclude(status__iregex=r"^(rejected|declined|cancel+ed)$")
         )
 
+    def absence_entries(self, period: Period):
+        """New Absence form entries of type sick or absent (late ones are late arrivals)."""
+        return HubAbsence.objects.filter(type__in=HubAbsence.MISSED, date__gte=period.start, date__lte=period.end)
+
+    def absence_person_days(self, period: Period) -> dict:
+        """
+        {(person, day): source} for the period: sick/absent entries from the New Absence form, plus the
+        weekdays inside the period of "Absent" time-off requests (not rejected). The same person on the same
+        day counts once, whichever way it was reported.
+        """
+        days = {}
+
+        def person(external_id, name):
+            return external_id or " ".join((name or "").lower().split())
+
+        for entry in self.absence_entries(period):
+            days.setdefault((person(entry.employee_external_id, entry.employee_name), entry.date), entry)
+        for request in self.absences(period):
+            first = max(request.start_date, period.start)
+            last = min(request.end_date or request.start_date, period.end)
+            day = first
+            while day <= last:
+                if day.weekday() < 5:
+                    days.setdefault((person(request.employee_external_id, request.employee_name), day), request)
+                day += timedelta(days=1)
+        return days
+
     def _absence_days(self, period):
-        total = 0
-        for start, end, weekdays in self.absences(period).values_list("start_date", "end_date", "weekday_count"):
-            total += weekdays or max(((end or start) - start).days + 1, 1)
-        return total
+        return len(self.absence_person_days(period))
 
     # ——— people ———
     def employee_table(self, period: Period) -> list:
@@ -539,6 +563,11 @@ class Metrics(FinanceMetrics, SalesMetrics, HubMetrics):
                 "hours": HubWorkHours.objects.aggregate(m=Min("date"))["m"],
                 "service_cancellations": HubServiceCancellation.objects.aggregate(m=Min("submitted_date"))["m"],
                 "late_arrivals": HubLateArrival.objects.aggregate(m=Min("date"))["m"],
+                # Absences: the New Absence form and Absent time-off requests. Blank before either, not zeros.
+                "absences": min(
+                    (d for d in (HubAbsence.objects.aggregate(m=Min("date"))["m"], HubLeaveRequest.objects.aggregate(m=Min("start_date"))["m"]) if d),
+                    default=None,
+                ),
                 "expenses": ledger.data_start(),
                 "payments": _local_date(PaymentRecord.objects.filter(integration=self.integration).aggregate(m=Min("entry_date"))["m"]),
                 "leads": self.leads_start(),

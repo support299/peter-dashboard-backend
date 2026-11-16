@@ -150,6 +150,9 @@ class ManagerPageTests(MasterDashboardDataMixin, TestCase):
             history = self.client.get(f"/api/insights/manager/history/?grain={grain}").json()
             self.assertEqual((len(history["labels"]), len(history["titles"])), (12, 12))
             self.assertEqual("mrr" in [s["key"] for s in history["series"]], grain == "month")
+            keys = [s["key"] for s in history["series"]]
+            self.assertIn("absence_days", keys)  # schedule reliability: absences + late arrivals
+            self.assertNotIn("cancelled_visits", keys)
         self.assertEqual(self.client.get("/api/insights/manager/capacity-check/").status_code, 403)  # staff only for now
 
 
@@ -449,3 +452,35 @@ class LeaveMatchingTests(SimpleTestCase):
         self.assertEqual(_on_leave(["Jaime Montoya"], [hub("jaime  montoya")]), ["Jaime Montoya"])
         self.assertEqual(_on_leave(["Jaime Montoya"], [hub("Jaime Lopez")]), [])  # two different full names
         self.assertEqual(_on_leave(["Rose"], [hub("")]), [])
+
+
+class AbsenceTests(MasterDashboardDataMixin, TestCase):
+    """Absences (Peter, Nov 16 2026): the Hub's New Absence form (sick/absent) plus Absent time-off requests."""
+
+    def test_sync_and_counting(self):
+        from analytics.hub_models import HubAbsence
+        from insights.drill import drill
+
+        rows = [
+            {"id": "a1", "date": "2026-10-05", "employee_id": "e1", "employee_name": "Rose Fong", "type": "sick", "type_label": "Sick"},
+            {"id": "a2", "date": "2026-10-06", "employee_id": "e1", "employee_name": "Rose Fong", "type": "late", "type_label": "Late"},
+            {"id": "a3", "date": "2026-10-07", "employee_id": "e2", "employee_name": "Jaya", "type": "No show", "type_label": "No show"},
+            {"id": "a4", "date": "", "employee_id": "e3", "employee_name": "No date"},  # skipped
+        ]
+        persist_payload({"meta": {}, "absence_log": {"available": True, "records": rows}}, AdminInternalSyncRun.objects.create())
+        self.assertEqual(dict(HubAbsence.objects.values_list("external_id", "type")), {"a1": "sick", "a2": "late", "a3": "absent"})
+        # Rose also filed an Absent time-off request Mon Oct 5 - Tue Oct 6: Oct 5 is the same person-day as her sick entry.
+        HubLeaveRequest.objects.create(external_id="l1", employee_external_id="e1", employee_name="Rose Fong", leave_type="Absent", status="approved", start_date=date(2026, 10, 5), end_date=date(2026, 10, 6))
+        HubLeaveRequest.objects.create(external_id="l2", employee_external_id="e9", employee_name="Off", leave_type="Absent", status="rejected", start_date=date(2026, 10, 8), end_date=date(2026, 10, 8))
+        # Spanning the month end: Fri Oct 30 - Tue Nov 3 = 2 weekdays in October, 2 in November.
+        HubLeaveRequest.objects.create(external_id="l3", employee_external_id="e4", employee_name="Lou", leave_type="Absent", status="approved", start_date=date(2026, 10, 30), end_date=date(2026, 11, 3))
+        metrics = Metrics(self.integration)
+        october = periods.build("month", date(2026, 10, 1)).whole()
+        # Rose: Oct 5 (sick + request, once), Oct 6 (request; her late entry doesn't count); Jaya Oct 7; Lou Oct 30
+        self.assertEqual(metrics.value("absence_days", october), 4)
+        november = periods.build("month", date(2026, 11, 1)).whole()
+        self.assertEqual(Metrics(self.integration).value("absence_days", november), 2)  # Lou: Nov 2, Nov 3
+        rows = drill(metrics, "absences", october)["rows"]
+        self.assertEqual(len(rows), 4)
+        self.assertEqual({r["how"] for r in rows}, {"New Absence form", "Time-off request"})
+        self.assertEqual(metrics.data_starts()["absences"], date(2026, 10, 5))

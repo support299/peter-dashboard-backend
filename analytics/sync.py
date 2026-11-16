@@ -13,6 +13,7 @@ from analytics.hub_models import (
     HubComplaint,
     HubContractorPay,
     HubEmployee,
+    HubAbsence,
     HubLateArrival,
     HubLeaveRequest,
     HubPendingLockIn,
@@ -432,6 +433,38 @@ def _upsert_late_arrivals(rows):
     return seen
 
 
+def _absence_type(value) -> str:
+    """late / sick / absent: anything that isn't late or sick is an absence (Hub, Nov 2026)."""
+    value = str(value or "").strip().lower()
+    return value if value in (HubAbsence.TYPE_LATE, HubAbsence.TYPE_SICK) else HubAbsence.TYPE_ABSENT
+
+
+def _upsert_absence_log(rows):
+    seen = set()
+    for row in rows:
+        external_id = str(row.get("id") or "").strip()
+        day = parse_d(row.get("date"))
+        if not external_id or not day:
+            continue
+        seen.add(external_id)
+        HubAbsence.objects.update_or_create(
+            external_id=external_id,
+            defaults={
+                "submission_id": str(row.get("submission_id") or ""),
+                "date": day,
+                "type": _absence_type(row.get("type")),
+                "type_label": str(row.get("type_label") or "")[:120],
+                "employee_external_id": str(row.get("employee_id") or ""),
+                "employee_name": row.get("employee_name") or "",
+                "jobber_user_id": row.get("jobber_user_id") or "",
+                "comment": row.get("comment") or "",
+                "submitted_at": parse_dt(row.get("submitted_at")),
+                "source_payload": row,
+            },
+        )
+    return seen
+
+
 def _flags(value):
     if isinstance(value, dict):
         return [key for key, on in value.items() if on]
@@ -499,6 +532,7 @@ HUB_FORM_SECTIONS = [
     ("service_cancellations", HubServiceCancellation, "submitted_date", _upsert_service_cancellations, _submitted_day),
     ("work_hours", HubWorkHours, "date", _upsert_work_hours, lambda row: parse_d(row.get("date"))),
     ("late_arrivals", HubLateArrival, "date", _upsert_late_arrivals, lambda row: parse_d(row.get("date"))),
+    ("absence_log", HubAbsence, "date", _upsert_absence_log, lambda row: parse_d(row.get("date"))),
     ("contractor_pay", HubContractorPay, "date", _upsert_contractor_pay, lambda row: parse_d(row.get("date"))),
 ]
 
