@@ -47,6 +47,13 @@ def _client_name(client):
     return client.name or client.company_name or " ".join(p for p in [client.first_name, client.last_name] if p) or "—"
 
 
+def _person(employee) -> str:
+    """A Jobber user's name ("Peter " in Jobber shows as "Peter"); blank when there's none, never an id."""
+    if not employee:
+        return ""
+    return (employee.full_name or " ".join(p for p in [employee.first_name, employee.last_name] if p)).strip()
+
+
 def _result(title, columns, rows, total_rows=None, **extra):
     return {"title": title, "columns": columns, "rows": rows[:LIMIT], "total_rows": total_rows if total_rows is not None else len(rows), **extra}
 
@@ -455,10 +462,16 @@ def _cancelled_recurring_jobs(metrics, period, **_):
     return _result("Cancelled recurring jobs", PLAN_COLUMNS, [plan_row(p) for p in qs.order_by("end_date")], editable="plans")
 
 
+# Peter (Nov 24, 2026): "Created" is the day the job was made in Jobber; "Booked date" is the day the
+# cleaning is booked for (its first visit that isn't cancelled), blank while it isn't scheduled.
+# "Created by" is the job's Salesperson: Jobber doesn't share who made a job, so the team sets the
+# Salesperson when creating one (Peter agreed, Nov 25, 2026). Blank when it isn't set.
 ONE_OFF_COLUMNS = [
-    col("booked", "Booked", "date"),
+    col("created", "Created", "date"),
+    col("booked", "Booked date", "date"),
     col("client", "Client"),
     col("job", "Job"),
+    col("created_by", "Created by"),
     col("division", "Division"),
     col("status", "Status"),
     col("value", "Value before tax", "currency"),
@@ -469,19 +482,26 @@ ONE_OFF_COLUMNS = [
 def _new_one_off_jobs(metrics, period, **_):
     values = metrics.one_off_values(period)
     invoiced = metrics.one_off_invoiced(period)
+    jobs = list(metrics.new_one_off_jobs(period).select_related("client", "salesperson").order_by("source_created_at"))
+    first_visit = dict(
+        Visit.objects.filter(job__in=jobs, is_cancelled=False, start_at__isnull=False)
+        .values("job_id").annotate(first=Min("start_at")).values_list("job_id", "first")
+    )
     rows = [
         {
-            "booked": timezone.localtime(job.source_created_at).date() if job.source_created_at else None,
+            "created": timezone.localtime(job.source_created_at).date() if job.source_created_at else None,
+            "booked": timezone.localtime(first_visit[job.id]).date() if job.id in first_visit else None,
             "client": _client_name(job.client),
             "job": job.title,
+            "created_by": _person(job.salesperson),
             "division": DIVISIONS.get(job.division, job.division or "—"),
             "status": (job.job_status or "").replace("_", " ").capitalize(),
             "value": values.get(job.id, Decimal(0)),
             "priced_from": "Invoice" if job.id in invoiced else "Job price (not invoiced yet)",
         }
-        for job in metrics.new_one_off_jobs(period).select_related("client").order_by("source_created_at")
+        for job in jobs
     ]
-    return _result("New one-off jobs", ONE_OFF_COLUMNS, rows, total=sum((row["value"] for row in rows), Decimal(0)))
+    return _result("One-off jobs created", ONE_OFF_COLUMNS, rows, total=sum((row["value"] for row in rows), Decimal(0)))
 
 
 MOVEMENT_COLUMNS = [

@@ -10,7 +10,7 @@ from insights.metrics import SCORECARD, Metrics
 from insights.models import STATUS_CANCELLED, RecurringPlan
 from insights.rebuild import rebuild_insights
 from insights.tests import TODAY, MasterDashboardDataMixin, at
-from operations.models import Client, Invoice, Job, JobLineItem
+from operations.models import Client, Employee, Invoice, Job, JobLineItem, Visit
 
 
 class PeriodTests(TestCase):
@@ -131,9 +131,22 @@ class WeeklyMetricsTests(MasterDashboardDataMixin, TestCase):
 
         from insights.drill import HANDLERS as DRILLS
 
+        # Booked date = the first visit that isn't cancelled; blank while nothing is scheduled.
+        Visit.objects.create(integration=self.integration, external_id="o4-v0", job=taxed, client=self.alice, start_at=at(date(2026, 10, 9)), is_cancelled=True)
+        Visit.objects.create(integration=self.integration, external_id="o4-v1", job=taxed, client=self.alice, start_at=at(date(2026, 10, 14)))
+        Visit.objects.create(integration=self.integration, external_id="o4-v2", job=taxed, client=self.alice, start_at=at(date(2026, 10, 21)))
+        # Created by = the job's Salesperson in Jobber, name only; blank when it isn't set.
+        taxed.salesperson = Employee.objects.create(integration=self.integration, external_id="u1", full_name="Peter ")
+        taxed.save()
         drill = DRILLS["new_one_off_jobs"](self.metrics, week)
         self.assertEqual((len(drill["rows"]), drill["total"]), (5, D("690.00")))
         self.assertEqual({r["priced_from"] for r in drill["rows"]}, {"Invoice", "Job price (not invoiced yet)"})
+        self.assertEqual([c["label"] for c in drill["columns"]][:2], ["Created", "Booked date"])
+        row = next(r for r in drill["rows"] if r["job"] == "o4")
+        self.assertEqual((row["created"], row["booked"]), (date(2026, 10, 7), date(2026, 10, 14)))
+        self.assertIsNone(next(r for r in drill["rows"] if r["job"] == "o5")["booked"])
+        self.assertEqual((row["created_by"], next(r for r in drill["rows"] if r["job"] == "o5")["created_by"]), ("Peter", ""))
+        self.assertIn("Created by", [c["label"] for c in drill["columns"]])
 
     def test_ceo_view_has_the_new_cards_on_a_week(self):
         for key in ("mrr_new", "mrr_churned", "mrr_net_new", "new_recurring_clients", "new_one_off_jobs", "new_one_off_revenue", "avg_one_off_price", "cancelled_recurring_clients"):
