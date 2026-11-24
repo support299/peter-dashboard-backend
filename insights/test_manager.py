@@ -136,7 +136,7 @@ class ManagerPageTests(MasterDashboardDataMixin, TestCase):
         HubLeaveRequest.objects.create(external_id="sub-3", employee_name="Old", employee_role="employee", status="approved", start_date=TODAY - timedelta(days=20), end_date=TODAY - timedelta(days=19))
         page = self.client.get("/api/insights/manager/").json()
         self.assertEqual([c["key"] for c in page["headline"]][:3], ["leads", "bookings_won", "new_recurring_clients"])
-        self.assertEqual({c["key"] for c in page["sales"]}, {"avg_booking_price", "open_leads"})
+        self.assertEqual([c["key"] for c in page["sales"]], ["new_one_off_jobs", "new_one_off_revenue", "avg_booking_price", "open_leads"])
         self.assertEqual(set(page["attention"]), {"first_visits_to_confirm", "visits_to_rebook", "visits_to_rebook_older", "rebook_days", "overdue_complaints"})
         self.assertIn("still_to_book", page["target"])
         staff = page["staffing"]

@@ -33,6 +33,7 @@ from operations.models import (
     Invoice,
     InvoiceLineItem,
     Job,
+    JobLineItem,
     PaymentRecord,
     Quote,
     Visit,
@@ -1069,11 +1070,20 @@ class Metrics(FinanceMetrics, SalesMetrics, HubMetrics):
         return qs.filter(division=self.division) if self.division else qs
 
     def one_off_values(self, period: Period) -> dict:
-        """{job id: value before tax}: what was invoiced (after discounts), else the job's price in Jobber."""
+        """{job id: value before tax}: what was invoiced (after discounts), else the job's price in Jobber.
+
+        Jobber's job total isn't a before-tax figure (it includes tax for taxed clients, and more on some
+        jobs: $199 of line items showed as $234.77), so a job not invoiced yet is priced from its line
+        items, which are. The total is only the fallback for a job with no line items.
+        """
         key = ("one_off_values", period.start, period.end)
         if key in self._cache:
             return self._cache[key]
         jobs = dict(self.new_one_off_jobs(period).values_list("id", "total"))
+        items = dict(
+            JobLineItem.objects.filter(job_id__in=jobs, total__isnull=False).values("job_id").annotate(s=Sum("total")).values_list("job_id", "s")
+        )
+        jobs = {job_id: items.get(job_id, total) for job_id, total in jobs.items()}
         through = Invoice.jobs.through.objects
         links = list(through.filter(job_id__in=jobs).exclude(invoice__invoice_status="draft").values_list("job_id", "invoice_id"))
         invoice_ids = {invoice_id for _, invoice_id in links}

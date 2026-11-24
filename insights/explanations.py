@@ -61,7 +61,7 @@ HOW = {
     "mrr_churned": "MRR lost from recurring clients who stopped completely, counted in the month their recurring job was closed in Jobber. On a day or week: recurring jobs cancelled that day or week, for clients with no other recurring job still running.",
     "new_recurring_clients": "Clients who started their first recurring service in the period (the clients behind New MRR). Clients coming back count as reactivated, not new.",
     "new_one_off_jobs": "One-off jobs created in Jobber in the period (booked), whatever date they're scheduled for. Clean on the Go's own jobs are left out.",
-    "new_one_off_revenue": "Value of those jobs before tax: the invoiced amount after discounts, or the job's price in Jobber while it isn't invoiced yet.",
+    "new_one_off_revenue": "Value of those jobs before tax: the invoiced amount after discounts, or, while it isn't invoiced yet, the job's line items in Jobber (its price before tax).",
     "avg_one_off_price": "New one-off jobs revenue ÷ the number of those jobs, leaving out jobs with no price.",
     "mrr_paused_net": "MRR moved out of Active MRR by pauses (negative) or back in by resumed clients (positive).",
     "mrr_untracked": "Price or frequency changes in months before tracking started, which can't be split into expansion or contraction.",

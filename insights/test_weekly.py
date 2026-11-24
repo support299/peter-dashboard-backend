@@ -10,7 +10,7 @@ from insights.metrics import SCORECARD, Metrics
 from insights.models import STATUS_CANCELLED, RecurringPlan
 from insights.rebuild import rebuild_insights
 from insights.tests import TODAY, MasterDashboardDataMixin, at
-from operations.models import Client, Invoice, Job
+from operations.models import Client, Invoice, Job, JobLineItem
 
 
 class PeriodTests(TestCase):
@@ -110,7 +110,9 @@ class WeeklyMetricsTests(MasterDashboardDataMixin, TestCase):
 
         invoiced = job("o1", date(2026, 10, 5), "300")
         shared_a, shared_b = job("o2", date(2026, 10, 6), "100"), job("o3", date(2026, 10, 6), "100")
-        job("o4", date(2026, 10, 7), "180")  # not invoiced: job price
+        taxed = job("o4", date(2026, 10, 7), "206.96")  # not invoiced: its line items, not Jobber's total with tax
+        JobLineItem.objects.create(integration=self.integration, external_id="o4-a", job=taxed, total=D("150"))
+        JobLineItem.objects.create(integration=self.integration, external_id="o4-b", job=taxed, total=D("30"))
         job("o5", date(2026, 10, 7), "0")  # no price: left out of the average
         job("o6", date(2026, 10, 1), "999")  # previous week
         internal = Client.objects.create(integration=self.integration, external_id="int", name="Clean on the Go", is_internal=True)

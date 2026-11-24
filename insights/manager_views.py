@@ -26,7 +26,8 @@ FORECAST_DAYS = 28  # the staffing view always looks four weeks ahead
 
 # Card groups follow Peter's mockup: six headline numbers, then Sales / Recurring revenue / Scheduling / Client experience.
 HEADLINE = ["leads", "bookings_won", "new_recurring_clients", "mrr_net_new", "visits_completed", "visits_planned", "invoiced_revenue"]
-SALES = ["avg_booking_price", "open_leads"]
+# Jobs created / new revenue added = one-off jobs created in Jobber and their value (Peter, Nov 24 2026).
+SALES = ["new_one_off_jobs", "new_one_off_revenue", "avg_booking_price", "open_leads"]
 RECURRING = ["mrr_new", "mrr_expansion", "mrr_contraction", "mrr_churned", "cancelled_recurring_clients"]
 SCHEDULING = ["cancelled_visits", "cancelled_recurring_jobs", "late_arrivals", "absence_days"]
 CLIENT_EXPERIENCE = ["complaints", "touch_ups", "google_five_star_new", "feedback_score", "feedback_responses"]
