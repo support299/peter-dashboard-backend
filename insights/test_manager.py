@@ -34,6 +34,13 @@ class HoursTests(SimpleTestCase):
             "4,5 heures": (D("4.5"), "ok"),
             "arrive at 9h30, 4 hours": (D(4), "ok"),  # a time of day isn't hours
             "8-10h job": (D(10), "range"),  # the upper number: free time is never overstated
+            # Pricing Calculator jobs put the word first.
+            "Estimated hours: 6.25–7.22 (2 cleaners)": (D("7.22"), "range"),
+            "Estimated labor hours: 3 - 4": (D(4), "range"),
+            "Labour hours: 4": (D(4), "ok"),
+            "Office hours: 9-5, code 1234": (None, "missing"),  # not work hours
+            "Arrival hours: 9-11": (None, "missing"),
+            "Estimated hours: 3–4, or 6-8h with the basement": (None, "unclear"),  # two different ranges
             "6.5h, or 7.5h with the basement": (None, "unclear"),
             "Code 1234, dog friendly": (None, "missing"),
             "": (None, "missing"),
@@ -68,11 +75,11 @@ class CapacityTests(MasterDashboardDataMixin, TestCase):
         mon, tue = days
         self.assertEqual((mon["booked"], mon["available"], mon["bookable"], mon["shortfall"]), (D(14), D("6.5"), D(0), D("7.5")))
         self.assertEqual(mon["booked_by_division"], {"residential": D(4), "commercial": D(10)})
-        self.assertEqual(sorted(r["status"] for r in mon["review"]), ["missing", "range"])
+        self.assertEqual(sorted(r["status"] for r in mon["review"]), ["missing"])  # a range is counted, not listed (Peter, Nov 26)
         self.assertEqual(mon["task_notes"], "John on call - specialty only")
         self.assertEqual((tue["availability"], tue["bookable"]), ("unconfirmed", None))
         totals = week_totals(days)
-        self.assertEqual((totals["booked"], totals["shortfall"], totals["unconfirmed_days"], totals["to_review"]), (D(19), D("7.5"), 1, 2))
+        self.assertEqual((totals["booked"], totals["shortfall"], totals["unconfirmed_days"], totals["to_review"]), (D(19), D("7.5"), 1, 1))
         commercial = capacity_days(self.integration, monday, monday, division="commercial")[0]
         self.assertEqual((commercial["booked"], commercial["bookable"]), (D(10), None))  # available is company-wide
         self.assertEqual(week_totals([commercial])["bookable"], None)  # not a misleading 0
@@ -395,12 +402,23 @@ class ForecastTests(MasterDashboardDataMixin, TestCase):
         self.assertIn("Off (approved time off): Rose.", day["note"])
         self.assertEqual(sorted(r["hours"] for r in day["rows"]), ["4 h", "—"])
         self.assertTrue(all(r["time"].endswith(("AM", "PM")) for r in day["rows"]))
+        # Hours to fix: one row per job, however many of its visits are affected; clear hours and ranges aren't listed.
+        job = Job.objects.create(integration=self.integration, external_id="j-fix", client=self.alice, title="Weekly clean", jobber_web_uri="https://secure.getjobber.com/work_orders/1")
+        for n, (day, text) in enumerate([(monday, "bring vacuum"), (monday + timedelta(days=7), "3h kitchen, 2h bathroom")]):
+            Visit.objects.create(integration=self.integration, external_id=f"jf{n}", client=self.alice, job=job, start_at=at(day, 13), instructions=text)
+        Visit.objects.create(integration=self.integration, external_id="d3", client=self.alice, title="Range visit", start_at=at(monday, 15), instructions="8-10h job")
         with mock.patch("django.utils.timezone.localdate", return_value=monday):
             review = drill(metrics, "capacity_review", periods.build("month", monday))
-        # Every listed visit has a reason; the one with clear hours ("4h job") isn't listed.
-        self.assertTrue(review["rows"] and all(r["check"] for r in review["rows"]))
-        self.assertNotIn("4 h", [r["hours"] for r in review["rows"]])
-        self.assertIn("No hours written", [r["check"] for r in review["rows"]])
+            from insights.capacity import forecast
+            jobs_to_fix = forecast(self.integration, monday)["jobs_to_fix"]
+        self.assertEqual(review["title"], "Hours to fix in Jobber")
+        by_job = {r["job"]: r for r in review["rows"]}
+        self.assertIn("", by_job)  # the visit with no job (and no title): "no hours here"
+        self.assertNotIn("Range visit", by_job)  # a range is counted, not listed
+        weekly = by_job["Weekly clean"]
+        self.assertEqual((weekly["visits"], weekly["check"], weekly["next"]), (2, "Several different numbers", monday))
+        self.assertEqual(weekly["open"], "https://secure.getjobber.com/work_orders/1")
+        self.assertEqual(jobs_to_fix, len(review["rows"]))  # the attention strip counts the same jobs
         self.assertEqual(drill(metrics, "capacity_day", periods.build("month", monday), category="nope")["rows"], [])
 
 

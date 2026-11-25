@@ -3,10 +3,11 @@ Cleaner-hours capacity from Jobber (Peter, Nov 2026). Groundwork: not shown to C
 been checked against a real week with Peter.
 
 Booked hours  = the cleaner-hours written in each visit's Instructions ("4hr job", "5h job",
-                "3.5 hours"). The number is the whole visit's labour, however many cleaners go.
-                Each visit counts once; cancelled visits don't count. A range ("8-10h job") counts
-                the upper number, so free time is never overstated; it is listed for review, like
-                visits with no hours or several different numbers.
+                "3.5 hours", or "Estimated hours: 6–7" from the Pricing Calculator). The number is
+                the whole visit's labour, however many cleaners go. Each visit counts once; cancelled
+                visits don't count. A range ("8-10h job") counts the upper number, so free time is
+                never overstated. Visits with no hours or several different numbers count 0 and are
+                listed for the manager to fix in Jobber (Peter, Nov 26 2026: ranges no longer listed).
 Available     = that day's Jobber task "Available Cleaners": each cleaner once × 6.5 h, read from the
                 title ("Available Cleaners: Vicky ATL, Leanna TL, …"). The people assigned to the task
                 are only used when the title has no names: on production the same 3 office people are
@@ -30,8 +31,16 @@ CAPACITY_TITLE = "available cleaners"
 
 _NUMBER = r"(\d+(?:[.,]\d+)?)"
 _UNIT = r"\s*(?:h\b|hr\b|hrs\b|hour\b|hours\b|heure\b|heures\b|h(?=\s*job))"
-RANGE = re.compile(_NUMBER + r"\s*(?:-|–|to|à)\s*" + _NUMBER + _UNIT, re.I)
+_TO = r"\s*(?:-|–|—|to|à)\s*"
+RANGE = re.compile(_NUMBER + _TO + _NUMBER + _UNIT, re.I)
 SINGLE = re.compile(_NUMBER + _UNIT, re.I)
+# The word first, as Pricing Calculator jobs write it: "Estimated labor hours: 6.25–7.22". Only with
+# "estimated" or "labo(u)r" in front, so "Office hours: 9-5" or "Arrival hours: 9-11" are never read as work.
+LABELLED = re.compile(
+    r"\b(?:estimated|labou?r)\s+(?:labou?r\s+)?(?:hours?|hrs?|heures?)\s*[:=]\s*" + _NUMBER + r"(?:" + _TO + _NUMBER + r")?", re.I
+)
+# Only these need someone to write the hours in Jobber; a range is counted (its higher number).
+NEEDS_FIX = ("missing", "unclear")
 SUFFIXES = re.compile(r"\b(?:A?TL|team lead(?:er)?)\b\.?", re.I)
 
 
@@ -46,11 +55,12 @@ def _num(text: str) -> Decimal:
 def parse_hours(text: str | None) -> tuple[Decimal | None, str]:
     """(hours, status): ok, range (upper number used), missing, or unclear (several different numbers)."""
     text = text or ""
-    ranges = RANGE.findall(text)
+    labelled = LABELLED.findall(text)
+    ranges = RANGE.findall(text) + [(a, b) for a, b in labelled if b]
     if ranges:
         values = {max(_num(a), _num(b)) for a, b in ranges}
         return (values.pop(), "range") if len(values) == 1 else (None, "unclear")
-    values = {_num(n) for n in SINGLE.findall(text)}
+    values = {_num(n) for n in SINGLE.findall(text)} | {_num(a) for a, b in labelled}
     values.discard(Decimal(0))
     if not values:
         return None, "missing"
@@ -93,15 +103,15 @@ def capacity_days(integration, start: date, end: date, division: str = "") -> li
     )
     if division:
         visits = visits.filter(division=division)
-    for visit in visits.select_related("client").only("id", "start_at", "instructions", "title", "division", "client__name"):
+    for visit in visits.select_related("client").only("id", "job_id", "start_at", "instructions", "title", "division", "client__name"):
         day = timezone.localtime(visit.start_at).date()
         hours, status = parse_hours(visit.instructions)
         if hours is not None:
             booked[day] += hours
             by_division[day][visit.division or "unassigned"] += hours
-        if status != "ok":
+        if status in NEEDS_FIX:
             review[day].append(
-                {"visit_id": visit.id, "client": visit.client.name if visit.client else "", "title": visit.title, "status": status, "hours": hours}
+                {"visit_id": visit.id, "job_id": visit.job_id, "client": visit.client.name if visit.client else "", "title": visit.title, "status": status, "hours": hours}
             )
 
     tasks = {}
@@ -256,5 +266,7 @@ def forecast(integration, today: date, division: str = "") -> dict:
         "gap_days": sum(1 for d in days if d["shortfall"]),
         "review_staffing": best >= REVIEW_STAFFING_WEEKS,
         "to_review": sum(len(d["review"]) for d in days),
+        # What the manager fixes in Jobber: a job's instructions cover its visits, so jobs, not visits.
+        "jobs_to_fix": len({r["job_id"] or f"visit-{r['visit_id']}" for d in days for r in d["review"]}),
         "unconfirmed_days": sum(1 for d in days if d["available"] is None and d["date"].weekday() < 5),
     }

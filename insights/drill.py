@@ -289,15 +289,61 @@ def _capacity_day(metrics, period, category="", **_):
     return _result(f"{day:%A, %B} {day.day}", CAPACITY_COLUMNS, _capacity_rows(_capacity_visits(metrics, day, day)), note=note, kicker="Capacity")
 
 
+HOURS_FIX_COLUMNS = [
+    col("open", "", "link"),
+    col("client", "Client"),
+    col("job", "Job"),
+    col("check", "Problem"),
+    col("visits", "Visits affected", "count"),
+    col("next", "Next visit", "date"),
+    col("written", "Instructions now"),
+]
+
+
 def _capacity_review(metrics, period, **_):
-    """Visits in the next 4 weeks whose hours are missing, a range or unclear."""
-    from insights.capacity import FORECAST_WEEKS, parse_hours
+    """
+    Hours for the manager to fix in Jobber (Peter, Nov 26 2026): jobs with visits in the next 4 weeks
+    whose instructions have no hours or several different numbers. One row per job, since writing the
+    hours in the job's instructions is how it's fixed; visits without a job are listed on their own.
+    """
+    from insights.capacity import FORECAST_WEEKS, NEEDS_FIX, parse_hours
 
     today = timezone.localdate()
     end = today - timedelta(days=(today.weekday() + 1) % 7) + timedelta(days=7 * FORECAST_WEEKS - 1)
-    rows = [r for r in _capacity_rows(_capacity_visits(metrics, today, end)) if r["check"]]
-    columns = [col("date", "Date", "date"), *CAPACITY_COLUMNS]
-    return _result("Visits to check: hours", columns, rows, note="Write the cleaner-hours in the visit's instructions in Jobber (e.g. “5h job”). Ranges count the higher number.", kicker="Next 4 weeks")
+    groups = {}
+    for v in _capacity_visits(metrics, today, end).select_related("client", "job").order_by("start_at"):
+        _, status = parse_hours(v.instructions)
+        if status not in NEEDS_FIX:
+            continue
+        key = v.job_id or f"visit-{v.id}"
+        row = groups.get(key)
+        if row is None:
+            text = " ".join((v.instructions or "").split())
+            row = groups[key] = {
+                "id": key,
+                "client": _client_name(v.client),
+                "job": (v.job.title if v.job_id else "") or v.title,
+                "statuses": set(),
+                "visits": 0,
+                "next": timezone.localtime(v.start_at).date(),
+                "written": (text[:90] + "…") if len(text) > 90 else (text or "(empty)"),
+                "open": _web_link(v.job.jobber_web_uri if v.job_id else "", v.client.jobber_web_uri if v.client_id else ""),
+                "open_label": "Open in Jobber ↗",
+            }
+        row["statuses"].add(status)
+        row["visits"] += 1
+    rows = []
+    for row in groups.values():
+        statuses = row.pop("statuses")
+        row["check"] = HOURS_STATUS["unclear" if "unclear" in statuses else "missing"]
+        rows.append(row)
+    rows.sort(key=lambda r: (r["next"], r["client"]))
+    note = (
+        "These count 0 hours in the capacity forecast. Open the job in Jobber and write the cleaner-hours in its "
+        "instructions (e.g. “4hr job”), making sure its upcoming visits have them too. A job drops off this list "
+        "once Jobber sends the change (within minutes, or by the nightly sync)."
+    )
+    return _result("Hours to fix in Jobber", HOURS_FIX_COLUMNS, rows, note=note, kicker="Next 4 weeks")
 
 
 def _touch_ups(metrics, period, **_):
