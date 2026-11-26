@@ -16,7 +16,7 @@ from django.views.decorators.http import require_GET
 
 from analytics.hub_models import HubEmployee, HubLeaveRequest
 from insights import periods
-from insights.attention import REBOOK_DAYS, overdue_complaints, visits_to_rebook
+from insights.attention import REBOOK_DAYS, needs_recurring_quote, overdue_complaints, visits_to_rebook
 from insights.capacity import capacity_days, forecast, week_totals
 from insights.targets import month_forecast
 from insights.views import _cards, _context, _no_integration, _period_payload, error, respond
@@ -106,6 +106,7 @@ def attention(metrics) -> dict:
         "visits_to_rebook_older": older,
         "rebook_days": REBOOK_DAYS,
         "overdue_complaints": overdue_complaints(metrics).count(),
+        "needs_recurring_quote": len(needs_recurring_quote(metrics)),
     }
 
 

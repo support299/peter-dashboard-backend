@@ -7,11 +7,17 @@ Visits to rebook     = past visits (before today) that were never completed and 
                        don't bury yesterday's; older ones are counted separately.
 Overdue complaints   = complaints open for more than 1 business day (Mon–Fri). They stay until marked resolved
                        in the Hub.
+Needs recurring quote (Peter, Nov 26 2026) = a one-off first clean completed more than 24 hours ago, in the
+                       last RECURRING_QUOTE_DAYS days, whose client got no "Recurring Service" / "Service
+                       Régulier" quote sent since the visit was booked, and has no recurring job (not archived).
+                       It leaves the list once the quote is sent, even late; a declined (archived) quote counts as
+                       sent. One row per client (their latest first clean, 24 hours after it).
 """
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+import re
+from datetime import date, datetime, timedelta
 
 from django.utils import timezone
 
@@ -20,6 +26,9 @@ from insights.periods import aware
 
 REBOOK_DAYS = 30
 OVERDUE_BUSINESS_DAYS = 1
+RECURRING_QUOTE_DAYS = 30
+RECURRING_QUOTE_WAIT = timedelta(hours=24)
+RECURRING_QUOTE_TITLE = re.compile(r"recurr|r[ée]guli[eè]r|regular", re.I)
 
 
 def previous_business_day(day: date) -> date:
@@ -55,3 +64,58 @@ def overdue_complaints(metrics, today: date | None = None):
     today = today or timezone.localdate()
     qs = HubComplaint.objects.exclude(status__iexact=HubComplaint.STATUS_RESOLVED).filter(submitted_date__lt=overdue_before(today))
     return metrics._hub_clients(qs)
+
+
+def _done_at(visit):
+    return visit.completed_at or visit.end_at or visit.start_at
+
+
+def needs_recurring_quote(metrics, now: datetime | None = None) -> list:
+    """Completed one-off first cleans still waiting for a recurring quote, latest first (one per client)."""
+    from operations.models import Job, Quote, Visit
+
+    now = now or timezone.now()
+    since = aware(timezone.localdate(now) - timedelta(days=RECURRING_QUOTE_DAYS))
+    qs = (
+        Visit.objects.filter(
+            integration=metrics.integration, is_first_clean=True, is_complete=True, is_cancelled=False, is_recurring=False,
+            client__isnull=False, start_at__gte=since, start_at__lt=now,
+        )
+        .exclude(client__is_internal=True)
+        .select_related("client", "team_leader", "job")
+        .order_by("-start_at")
+    )
+    if metrics.division:
+        qs = qs.filter(division=metrics.division)
+    latest, seen = {}, set()
+    for visit in qs:
+        if visit.client_id in seen:
+            continue
+        seen.add(visit.client_id)
+        # The 24 hours count from the client's last first clean (some first cleans take several visits).
+        if now - _done_at(visit) > RECURRING_QUOTE_WAIT:
+            latest[visit.client_id] = visit
+    if not latest:
+        return []
+    recurring = set(
+        Job.objects.filter(integration=metrics.integration, client_id__in=latest, is_recurring=True)
+        .exclude(job_status="archived")
+        .values_list("client_id", flat=True)
+    )
+    sent = {}  # client -> when each recurring quote went out
+    for client_id, title, status, sent_at, changed, created in Quote.objects.filter(integration=metrics.integration, client_id__in=latest).values_list(
+        "client_id", "title", "quote_status", "sent_at", "transitioned_at", "source_created_at"
+    ):
+        # A draft hasn't gone to the client yet; any other status means it was sent (or declined/archived).
+        when = sent_at or (None if status in ("", "draft") else changed or created)
+        if when and RECURRING_QUOTE_TITLE.search(title or ""):
+            sent.setdefault(client_id, []).append(when)
+    rows = []
+    for client_id, visit in latest.items():
+        if client_id in recurring:
+            continue
+        booked = visit.source_created_at or _done_at(visit) - timedelta(days=RECURRING_QUOTE_DAYS)
+        if any(when >= booked for when in sent.get(client_id, [])):
+            continue
+        rows.append(visit)
+    return rows

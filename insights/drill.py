@@ -382,6 +382,49 @@ def _first_visits_to_confirm(metrics, period, **_):
     return _result("First visits to confirm", BOOKING_COLUMNS, rows, kicker="As of today", note=f"Bookings approved in the last {CONFIRM_DAYS} days with no visit scheduled in Jobber yet.")
 
 
+RECURRING_QUOTE_COLUMNS = [
+    col("open", "", "link"),
+    col("date", "First clean", "date"),
+    col("client", "Client"),
+    col("title", "Visit"),
+    col("division", "Division"),
+    col("team_leader", "Team leader"),
+    col("waiting", "Waiting"),
+]
+
+
+def _waiting(since, now) -> str:
+    days = (now - since).days
+    return f"{days} days" if days > 1 else "1 day"
+
+
+def _needs_recurring_quote(metrics, period, **_):
+    from insights.attention import RECURRING_QUOTE_DAYS, _done_at, needs_recurring_quote
+
+    now = timezone.now()
+    rows = [
+        {
+            "id": v.id,
+            "date": _local(v.start_at),
+            "client": _client_name(v.client),
+            "title": v.title,
+            "division": DIVISIONS.get(v.division, v.division or "—"),
+            "team_leader": v.team_leader.full_name if v.team_leader else "",
+            "waiting": _waiting(_done_at(v), now),
+            # The client's page in Jobber is where the quote gets created.
+            "open": _web_link(v.client.jobber_web_uri, v.job.jobber_web_uri if v.job_id else ""),
+            "open_label": "Open in Jobber ↗",
+        }
+        for v in needs_recurring_quote(metrics, now)
+    ]
+    note = (
+        f"One-off first cleans completed more than 24 hours ago (last {RECURRING_QUOTE_DAYS} days) with no \"Recurring Service\" quote sent "
+        "since they were booked, for clients with no recurring job. A client leaves the list once the quote is sent in Jobber, "
+        "or declined (archived)."
+    )
+    return _result("Needs recurring quote", RECURRING_QUOTE_COLUMNS, rows, note=note, kicker="As of today")
+
+
 # ——— clients ———
 def _client_rows(metrics: Metrics, ids):
     stats = (
@@ -936,6 +979,7 @@ HANDLERS = {
     "capacity_day": _capacity_day,
     "capacity_review": _capacity_review,
     "first_visits_to_confirm": _first_visits_to_confirm,
+    "needs_recurring_quote": _needs_recurring_quote,
     "complaints_resolved": _complaints_resolved,
     "labour_hours": _labour_hours,
     "late_arrivals": _late_arrivals,

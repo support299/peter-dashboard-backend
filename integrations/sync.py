@@ -51,6 +51,7 @@ from operations.models import (
     JobLineItem,
     JobberTask,
     Property,
+    Quote,
     Visit,
     VisitAssignment,
 )
@@ -471,6 +472,10 @@ class JobberSyncService:
             "USER": ("user", USERS_SELECTION, self._upsert_user),
             "TASK": ("task", TASKS_SELECTION, self._upsert_task),
         }
+        if object_name == "QUOTE":
+            from integrations.sales_sync import apply_quote
+
+            return apply_quote(self, item_id)
         spec = mapping.get(object_name)
         if not spec:
             logger.info("No local mapper for Jobber webhook object %s", object_name)
@@ -506,6 +511,7 @@ class JobberSyncService:
             "PROPERTY": Property,
             "USER": Employee,
             "TASK": JobberTask,
+            "QUOTE": Quote,
         }
         model = model_map.get(object_name)
         if not model:

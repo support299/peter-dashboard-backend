@@ -280,3 +280,25 @@ class SalesSync:
 
 
 MODELS = {"requests": JobberRequest, "quotes": Quote, "paymentRecords": PaymentRecord}
+
+
+def apply_quote(service, item_id: str) -> bool:
+    """One quote from a Jobber webhook (created, sent, approved, …), so the dashboard doesn't wait for the evening sync.
+    Asks only for the fields the last full sync found in Jobber's schema."""
+    from insights.models import InsightsSetting
+    from integrations.queries import node_query
+
+    found = set((InsightsSetting.get(STATUS_KEY, {}) or {}).get("quotes", {}).get("fields") or [])
+    if not found:
+        found = Schema(service.client).selection("quotes")[1]
+    parts = []
+    for item in WISHLIST["quotes"]:
+        name, sub = (item, "") if isinstance(item, str) else item
+        if name in found:
+            parts.append(f"{name} {sub}".strip())
+    node = (service.client.execute(node_query("quote", " ".join(parts)), {"id": item_id}) or {}).get("quote")
+    if not node or not node.get("id"):
+        logger.warning("Jobber quote %s was empty after webhook fetch", item_id)
+        return False
+    SalesSync(service).upsert_quote(node)
+    return True

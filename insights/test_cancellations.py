@@ -54,6 +54,27 @@ class SelectionTests(TestCase):
         sync._upsert_job.assert_called_once_with({"id": "j1"})
 
 
+class QuoteWebhookTests(MasterDashboardDataMixin, TestCase):
+    def test_a_sent_quote_arrives_without_waiting_for_the_evening_sync(self):
+        from insights.models import InsightsSetting
+        from integrations.sales_sync import STATUS_KEY
+        from operations.models import Quote
+
+        InsightsSetting.put(STATUS_KEY, {"quotes": {"ok": True, "fields": ["id", "title", "quoteStatus", "sentAt", "client", "amounts"]}})
+        sync = JobberSync.__new__(JobberSync)
+        sync.integration, sync.counts, sync._client_cache = self.integration, {}, {}
+        node = {"id": "Q1", "title": "Recurring Service", "quoteStatus": "awaiting_response", "sentAt": "2026-10-12T15:00:00Z", "client": {"id": "c2"}, "amounts": {"subtotal": "120", "total": "138"}}
+        sync.client = mock.Mock(execute=mock.Mock(return_value={"quote": node}))
+        self.assertTrue(sync.apply_remote_node("QUOTE", "Q1"))
+        query = sync.client.execute.call_args[0][0]
+        self.assertIn("quote(id: $id)", query)
+        self.assertIn("amounts { subtotal total }", query)
+        self.assertNotIn("transitionedAt", query)  # only fields Jobber had last time
+        quote = Quote.objects.get(external_id="Q1")
+        self.assertEqual((quote.client, quote.quote_status, quote.subtotal, quote.sent_at.day), (self.bob, "awaiting_response", D("120"), 12))
+        self.assertEqual(sync.delete_remote_node("QUOTE", "Q1"), 1)
+
+
 class VisitPruneTests(MasterDashboardDataMixin, TestCase):
     def sync(self):
         sync = JobberSync.__new__(JobberSync)
