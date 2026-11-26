@@ -75,6 +75,59 @@ class QuoteWebhookTests(MasterDashboardDataMixin, TestCase):
         self.assertEqual(sync.delete_remote_node("QUOTE", "Q1"), 1)
 
 
+class NewJobWebhookTests(MasterDashboardDataMixin, TestCase):
+    def sync(self, execute):
+        sync = JobberSync.__new__(JobberSync)
+        sync.integration, sync.counts, sync.sync_run = self.integration, {}, None
+        sync._client_cache, sync._employee_cache, sync._property_cache, sync._job_cache, sync._invoice_cache = {}, {}, {}, {}, {}
+        sync.client = mock.Mock(execute=mock.Mock(side_effect=execute))
+        return sync
+
+    def test_a_visit_handled_before_its_new_job_keeps_its_line_items(self):
+        """Peter, Nov 26: Jobber sends JOB_CREATE and VISIT_CREATE at once; the visit was saved without its job."""
+        from django.db import IntegrityError
+
+        from operations.models import Job, JobLineItem, Visit
+
+        job = {"id": "JNEW", "title": "Deep clean", "jobType": "ONE_OFF", "total": "576.90", "client": {"id": "c2"}}
+        visit = {"id": "VNEW", "title": "Deep clean", "startAt": "2026-11-26T14:30:00Z", "client": {"id": "c2"}, "job": {"id": "JNEW"},
+                 "lineItems": {"nodes": [{"id": "LNEW", "name": "Deep clean", "quantity": 1, "unitPrice": "489", "totalPrice": "489"}]}}
+        sync = self.sync(lambda query, variables=None: {"job": job} if "job(id" in query else {"visit": visit})
+        self.assertTrue(sync.apply_remote_node("VISIT", "VNEW"))
+        saved = Visit.objects.get(external_id="VNEW")
+        self.assertEqual(saved.job, Job.objects.get(external_id="JNEW"))
+        self.assertEqual(JobLineItem.objects.get(external_id="LNEW").job, saved.job)
+        # The job's own webhook commits it just after this one looked for it, so this one's insert clashes:
+        # no error, and the visit still finds the job.
+        Visit.objects.filter(external_id="VNEW").delete()
+        Job.objects.filter(external_id="JNEW").delete()
+        sync = self.sync(lambda query, variables=None: {"job": job} if "job(id" in query else {"visit": visit})
+        Job.objects.create(integration=self.integration, external_id="JNEW", client=self.bob, title="Deep clean", is_one_off=True)
+        real_lookup, first = sync._lookup, []
+
+        def lookup(cache, model, ext):
+            if model is Job and not first:
+                first.append(ext)
+                return None  # not there yet when _ensure_job looks
+            return real_lookup(cache, model, ext)
+
+        def clash(node):
+            raise IntegrityError("duplicate key value violates unique constraint uniq_job_ext")
+
+        with mock.patch.object(sync, "_lookup", side_effect=lookup), mock.patch.object(sync, "_upsert_job", side_effect=clash):
+            self.assertTrue(sync.apply_remote_node("VISIT", "VNEW"))
+        self.assertEqual(Visit.objects.get(external_id="VNEW").job.external_id, "JNEW")
+        self.assertEqual(JobLineItem.objects.get(external_id="LNEW").job.external_id, "JNEW")
+        # A job we already have isn't fetched again.
+        Visit.objects.filter(external_id="VNEW").update(job=None)
+        sync = self.sync(lambda query, variables=None: {"job": job} if "job(id" in query else {"visit": visit})
+        with mock.patch.object(JobberSync, "_ensure_job", wraps=sync._ensure_job) as ensure:
+            self.assertTrue(sync.apply_remote_node("VISIT", "VNEW"))
+        ensure.assert_called_once_with("JNEW")
+        self.assertEqual(Visit.objects.get(external_id="VNEW").job.external_id, "JNEW")
+        self.assertEqual(sum(1 for c in sync.client.execute.call_args_list if "job(id" in c[0][0]), 0)
+
+
 class VisitPruneTests(MasterDashboardDataMixin, TestCase):
     def sync(self):
         sync = JobberSync.__new__(JobberSync)

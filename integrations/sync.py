@@ -3,6 +3,7 @@ from collections import defaultdict
 from datetime import timedelta
 from decimal import Decimal
 
+from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.utils import timezone
 
@@ -498,8 +499,24 @@ class JobberSyncService:
         if not node:
             logger.warning("Jobber %s %s was empty after webhook fetch", object_name, item_id)
             return False
+        if root == "visit":
+            self._ensure_job(node_id(node.get("job")))
         upsert(node)
         return True
+
+    def _ensure_job(self, job_id: str):
+        """A new job's visit webhook can be handled a split second before the job's own (Jobber sends both at
+        once). Saved without its job, the visit would lose its line items and the job its before-tax price
+        until the evening sync (Peter, Nov 26 2026), so the job is fetched first."""
+        if not job_id or self._lookup(self._job_cache, Job, job_id):
+            return
+        try:
+            with transaction.atomic():
+                self.apply_remote_node("JOB", job_id)
+        except IntegrityError:
+            pass  # the job's own webhook saved it at the same moment: the visit finds it now
+        except JobberAPIError as exc:
+            logger.warning("Couldn't fetch job %s for a new visit: %s", job_id, exc)
 
     def delete_remote_node(self, object_name: str, item_id: str):
         model_map = {
