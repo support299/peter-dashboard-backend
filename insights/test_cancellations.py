@@ -118,6 +118,18 @@ class NewJobWebhookTests(MasterDashboardDataMixin, TestCase):
             self.assertTrue(sync.apply_remote_node("VISIT", "VNEW"))
         self.assertEqual(Visit.objects.get(external_id="VNEW").job.external_id, "JNEW")
         self.assertEqual(JobLineItem.objects.get(external_id="LNEW").job.external_id, "JNEW")
+        # Jobber times out on the job: the visit is still saved (the evening sync links it), never lost.
+        Visit.objects.filter(external_id="VNEW").delete()
+        Job.objects.filter(external_id="JNEW").delete()
+
+        def timeout(query, variables=None):
+            if "job(id" in query:
+                raise ConnectionError("Read timed out. (read timeout=60)")
+            return {"visit": visit}
+
+        self.assertTrue(self.sync(timeout).apply_remote_node("VISIT", "VNEW"))
+        self.assertIsNone(Visit.objects.get(external_id="VNEW").job)
+        Job.objects.create(integration=self.integration, external_id="JNEW", client=self.bob, title="Deep clean", is_one_off=True)
         # A job we already have isn't fetched again.
         Visit.objects.filter(external_id="VNEW").update(job=None)
         sync = self.sync(lambda query, variables=None: {"job": job} if "job(id" in query else {"visit": visit})

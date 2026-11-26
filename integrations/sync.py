@@ -515,7 +515,7 @@ class JobberSyncService:
                 self.apply_remote_node("JOB", job_id)
         except IntegrityError:
             pass  # the job's own webhook saved it at the same moment: the visit finds it now
-        except JobberAPIError as exc:
+        except Exception as exc:  # noqa: BLE001 - Jobber busy or timing out: still save the visit; the evening sync links it
             logger.warning("Couldn't fetch job %s for a new visit: %s", job_id, exc)
 
     def delete_remote_node(self, object_name: str, item_id: str):
