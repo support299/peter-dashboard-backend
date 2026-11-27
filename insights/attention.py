@@ -7,11 +7,13 @@ Visits to rebook     = past visits (before today) that were never completed and 
                        don't bury yesterday's; older ones are counted separately.
 Overdue complaints   = complaints open for more than 1 business day (Mon–Fri). They stay until marked resolved
                        in the Hub.
-Needs recurring quote (Peter, Nov 26 2026) = a one-off first clean completed more than 24 hours ago, in the
+Needs recurring quote (Peter, Nov 26 2026) = a one-off first or deep clean (Peter, Nov 27: only visits whose
+                       title, or their job's, says "first clean" or "deep clean"; move-in/out cleans don't
+                       count) completed more than 24 hours ago, in the
                        last RECURRING_QUOTE_DAYS days, whose client got no "Recurring Service" / "Service
                        Régulier" quote sent since the visit was booked, and has no recurring job (not archived).
                        It leaves the list once the quote is sent, even late; a declined (archived) quote counts as
-                       sent. One row per client (their latest first clean, 24 hours after it).
+                       sent. One row per client (their latest such clean, 24 hours after it).
 """
 
 from __future__ import annotations
@@ -29,6 +31,8 @@ OVERDUE_BUSINESS_DAYS = 1
 RECURRING_QUOTE_DAYS = 30
 RECURRING_QUOTE_WAIT = timedelta(hours=24)
 RECURRING_QUOTE_TITLE = re.compile(r"recurr|r[ée]guli[eè]r|regular", re.I)
+# "First Cleaning", "Deep-clean", and the one French title used ("Premier nettoyage").
+QUOTE_AFTER_TITLE = r"first[ -]?clean|deep[ -]?clean|premi[eè]re? nettoyage"
 
 
 def previous_business_day(day: date) -> date:
@@ -71,17 +75,21 @@ def _done_at(visit):
 
 
 def needs_recurring_quote(metrics, now: datetime | None = None) -> list:
-    """Completed one-off first cleans still waiting for a recurring quote, latest first (one per client)."""
+    """Completed one-off first/deep cleans still waiting for a recurring quote, latest first (one per client)."""
+    from django.db.models import Q
+
     from operations.models import Job, Quote, Visit
 
     now = now or timezone.now()
     since = aware(timezone.localdate(now) - timedelta(days=RECURRING_QUOTE_DAYS))
     qs = (
         Visit.objects.filter(
-            integration=metrics.integration, is_first_clean=True, is_complete=True, is_cancelled=False, is_recurring=False,
+            integration=metrics.integration, is_complete=True, is_cancelled=False, is_recurring=False,
             client__isnull=False, start_at__gte=since, start_at__lt=now,
         )
+        .filter(Q(title__iregex=QUOTE_AFTER_TITLE) | Q(job__title__iregex=QUOTE_AFTER_TITLE))
         .exclude(client__is_internal=True)
+        .exclude(is_touch_up=True)  # a redo added to a first-clean job isn't a clean of its own
         .select_related("client", "team_leader", "job")
         .order_by("-start_at")
     )
@@ -92,7 +100,7 @@ def needs_recurring_quote(metrics, now: datetime | None = None) -> list:
         if visit.client_id in seen:
             continue
         seen.add(visit.client_id)
-        # The 24 hours count from the client's last first clean (some first cleans take several visits).
+        # The 24 hours count from the client's last first/deep clean (some take several visits).
         if now - _done_at(visit) > RECURRING_QUOTE_WAIT:
             latest[visit.client_id] = visit
     if not latest:

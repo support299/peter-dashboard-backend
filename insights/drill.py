@@ -384,7 +384,7 @@ def _first_visits_to_confirm(metrics, period, **_):
 
 RECURRING_QUOTE_COLUMNS = [
     col("open", "", "link"),
-    col("date", "First clean", "date"),
+    col("date", "Clean date", "date"),
     col("client", "Client"),
     col("title", "Visit"),
     col("division", "Division"),
@@ -418,7 +418,7 @@ def _needs_recurring_quote(metrics, period, **_):
         for v in needs_recurring_quote(metrics, now)
     ]
     note = (
-        f"One-off first cleans completed more than 24 hours ago (last {RECURRING_QUOTE_DAYS} days) with no \"Recurring Service\" quote sent "
+        f"One-off first and deep cleans completed more than 24 hours ago (last {RECURRING_QUOTE_DAYS} days) with no \"Recurring Service\" quote sent "
         "since they were booked, for clients with no recurring job. A client leaves the list once the quote is sent in Jobber, "
         "or declined (archived)."
     )

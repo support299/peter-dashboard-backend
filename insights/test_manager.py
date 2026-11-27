@@ -216,16 +216,16 @@ class PeterAnswersTests(MasterDashboardDataMixin, TestCase):
         now = at(TODAY, 12)
         ago = lambda days: now - timedelta(days=days)  # noqa: E731
 
-        def first_clean(client, ext, days, booked=10, **kw):
+        def first_clean(client, ext, days, booked=10, title="First Cleaning - Detailed", **kw):
             fields = dict(is_first_clean=True, is_complete=True, start_at=ago(days), end_at=ago(days) + timedelta(hours=3), division="residential")
             fields.update(kw)
-            Visit.objects.create(integration=self.integration, external_id=ext, client=client, title=f"{client.name} - First clean", source_created_at=ago(booked), **fields)
+            Visit.objects.create(integration=self.integration, external_id=ext, client=client, title=f"{client.name} - {title}", source_created_at=ago(booked), **fields)
 
         def quote(client, title, status="awaiting_response", sent=None, **kw):
             Quote.objects.create(integration=self.integration, external_id=f"q-{client.external_id}-{Quote.objects.count()}", client=client, title=title, quote_status=status, sent_at=sent, **kw)
 
         people = {name: Client.objects.create(integration=self.integration, external_id=f"rq-{name}", name=name.title(), jobber_web_uri=f"https://secure.getjobber.com/clients/{name}") for name in
-                  ("carl", "dana", "erin", "fay", "gus", "hal", "ivy", "staff")}
+                  ("carl", "dana", "erin", "fay", "gus", "hal", "ivy", "staff", "kim", "lou", "max", "ned")}
         Client.objects.filter(pk=people["staff"].pk).update(is_internal=True)
         first_clean(self.bob, "bob-1", 6)  # Bob's recurring job is archived: he needs one again
         first_clean(self.bob, "bob-2", 3)  # two first cleans: one row, the latest
@@ -243,13 +243,20 @@ class PeterAnswersTests(MasterDashboardDataMixin, TestCase):
         quote(people["ivy"], "Deep clean", sent=ago(1))  # not a recurring quote
         first_clean(people["staff"], "staff", 3)  # internal
         first_clean(self.alice, "alice", 3)  # has an active recurring job
+        # Peter, Nov 27: only first and deep cleans, by the visit's title or its job's.
+        first_clean(people["kim"], "kim", 2.2, title="Deep Cleaning")
+        first_clean(people["lou"], "lou", 2.4, title="Move In/Out Cleaning - Detailed")  # counted as a first clean elsewhere, not here
+        job = Job.objects.create(integration=self.integration, external_id="j-max", client=people["max"], title="Max - First Clean + Deep Clean", is_one_off=True)
+        first_clean(people["max"], "max", 2.6, title="Occasional Custom Cleaning", job=job, is_first_clean=False)
+        first_clean(people["ned"], "ned", 2.8, title="Premier nettoyage")
+        first_clean(people["max"], "max-touch", 1.5, title="Touch-Up", job=job, is_first_clean=False, is_touch_up=True)  # doesn't restart the 24h
         first_clean(self.dental, "dental", 0, start_at=now - timedelta(hours=4), end_at=now - timedelta(hours=2))  # not 24h yet
         first_clean(people["carl"], "carl-open", 2, is_complete=False)  # not done
         first_clean(people["gus"], "gus-1", 5)  # a first clean over two visits: wait 24h after the last one
         first_clean(people["gus"], "gus-2", 0, start_at=now - timedelta(hours=5), end_at=now - timedelta(hours=2))
         metrics = Metrics(self.integration)
         listed = needs_recurring_quote(metrics, now)
-        self.assertEqual([v.external_id for v in listed], ["bob-2", "fay", "ivy", "dana"])
+        self.assertEqual([v.external_id for v in listed], ["kim", "max", "ned", "bob-2", "fay", "ivy", "dana"])
         self.assertEqual(len(needs_recurring_quote(Metrics(self.integration, division="commercial"), now)), 0)
         # 24h counts from when the visit was completed.
         Visit.objects.filter(external_id="dental").update(completed_at=now - timedelta(hours=25))
@@ -261,10 +268,11 @@ class PeterAnswersTests(MasterDashboardDataMixin, TestCase):
 
         with mock.patch("django.utils.timezone.now", return_value=now):
             result = drill(metrics, "needs_recurring_quote", periods.build("month", TODAY))
-        self.assertEqual([r["client"] for r in result["rows"]], ["Bob", "Fay", "Ivy", "Dana"])
-        self.assertEqual(result["rows"][1]["open"], "https://secure.getjobber.com/clients/fay")
-        self.assertEqual((result["rows"][0]["waiting"], result["rows"][3]["waiting"]), ("2 days", "3 days"))  # from the end of the visit
-        self.assertEqual(result["rows"][0]["date"], (ago(3)).date())
+        rows = {r["client"]: r for r in result["rows"]}
+        self.assertEqual(list(rows), ["Kim", "Max", "Ned", "Bob", "Fay", "Ivy", "Dana"])
+        self.assertEqual(rows["Fay"]["open"], "https://secure.getjobber.com/clients/fay")
+        self.assertEqual((rows["Bob"]["waiting"], rows["Dana"]["waiting"]), ("2 days", "3 days"))  # from the end of the visit
+        self.assertEqual(rows["Bob"]["date"], ago(3).date())
 
     def test_bookings_won_are_accepted_quotes_not_recurring(self):
         from insights.models import InsightsSetting
